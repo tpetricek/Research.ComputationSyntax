@@ -1,0 +1,1085 @@
+\documentclass{tmr}
+\usepackage{mflogo}
+
+%\usepackage{ulem}
+%\usepackage{verbatim}
+
+%include lhs2TeX.fmt
+%include lhs2TeX.sty
+%include polycode.fmt
+
+%\newcommand{\authornote}[3]{{\color{#2} {\sc #1}: #3}}
+%\newcommand\dom[1]{\authornote{dominic}{blue}{#1}}
+%\newcommand\dout[1]{ {\color{blue}{\sout{#1}}} }
+%\newcommand\din[1]{ {\color{blue}{{#1}}} }
+
+\title{Fun with Parallel Monad Comprehensions}
+\author{Tomas Petricek\email{tomas.petricek@cl.cam.ac.uk}}
+
+\begin{document}
+\newcommand{\fsharp}[0]{F$^\#$}
+\newcommand{\ident}[1]{{\normalfont\sffamily #1}}
+
+% ==================================================================================================
+
+\begin{introduction} 
+Monad comprehensions have an interesting history. They were the first syntactic extension for 
+programming with monads. They were implemented in Haskell, but later replaced with plain list
+comprehensions and monadic do notation. Now, monad comprehensions are back in Haskell,
+more powerful than ever before!
+
+Redesigned monad comprehensions generalize the syntax for working with lists. Quite interestingly, 
+they also generalize syntax for zipping, grouping and ordering of lists. This article, shows how to 
+use some of the new expressive power when working with well-known monads. You'll learn what 
+``parallel composition'' means for parsers, poor man's concurrency monad and an evaluation 
+order monad.
+\end{introduction}
+
+% ==================================================================================================
+
+\section{Introduction}
+
+This article is inspired by my earlier work on \textit{joinads} \cite{joinads}, an extension that 
+adds pattern matching on abstract values to the \textit{computation expression} syntax in \fsharp. 
+Computation expressions are quite similar to the do notation in Haskell, but there are some notable 
+differences. I'll briefly write about them later. After implementing the \fsharp \ version of 
+joinads, I wanted to see how the ideas would look in Haskell. I was quite surprised to find out that 
+a recent patch for GHC adds some of the expressive power of joinads to Haskell. 
+
+To add some background -- the \fsharp \ computation expression syntax can be used to work with 
+\textit{monads}, but also with \textit{monoids} and a few other abstract notions of computation. 
+It also adds several constructs that generalize imperative features of \fsharp \ including |while| 
+and |for| loops as well as exception handling. The \textit{joinads} extension adds support for
+pattern-matching on ``monadic values''. For example, you can define a parallel programming monad
+and use joinads to wait until two parallel computations both complete or wait until the first of 
+the two completes returning a value matching a particular pattern.
+
+How are \fsharp \ joinads related to Haskell? A recent GHC patch implemented by Nils Schweinsberg 
+\cite{bringbackmc, comprefun} brings back the support for monad comprehensions to Haskell. 
+The patch doesn't just re-implement original monad comprehensions, but it also generalizes recent 
+additions to list comprehensions allowing parallel monad comprehensions and monadic 
+versions of operations like ordering and grouping \cite{groupordercompre}. 
+
+The operation that generalizes parallel comprehensions is closely related to a |merge| operation 
+that I designed for \fsharp \ joinads. In the rest of this article, I demonstrate some of the 
+interesting programs that can be written using this operation and the elegant syntax provided by 
+the re-designed monad comprehensions. 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Quick review of list comprehensions}
+List comprehensions are a very powerful mechanism for working with lists in Haskell. I expect that 
+you're already familiar with them, but let me start with a few examples. I will use the examples 
+later to demonstrate how the generalized monad comprehension syntax works in a few interesting cases.
+
+If we have a list |animals| containing ``cat'' and ``dog'' and a list |sounds| containing 
+animal sounds ``meow'' and ``woof'', we can write the following snippets:
+
+\begin{verbatim}
+> [ a ++ " " ++ s | a <- animals, s <- sounds ]
+["cat meow","cat woof","dog meow","dog woof"]
+
+> [ a ++ " " ++ s | a <- animals, s <- sounds, a !! 1 == s !! 1 ]
+["dog woof"]
+
+> [ a ++ " " ++ s | a <- animals | s <- sounds ]
+["cat meow","dog woof"]
+\end{verbatim}
+The first example uses just the basic list comprehension syntax. It uses two \textit{generators}
+to implement a join of the two collections. The second example adds a guard to specify that we
+want only pairs of strings whose second character is the same. The guard serves as an additional
+filtering of the results.
+
+The last example uses parallel list comprehensions. The syntax is available after enabling the 
+\ident{ParallelListComp} language extension. It allows us to take elements from multiple lists, so
+that a n$^\text{th}$ element of the first list is matched with the n$^\text{th}$ element of the 
+second list. The same functionality can be easily expressed using the |zip| function. 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Generalizing to monad comprehensions}
+The three examples we've seen in the previous section are straightforward when working with lists.
+When you apply the patch that implements monad comprehensions \cite{bringbackmc} and turn on the
+\ident{MonadComprehensions} language extension, you can use the same syntax for working
+with further notions of computations. If we implement appropriate type classes, we can even use 
+guards, parallel comprehensions and operations like ordering or grouping. 
+Figure~\ref{fig:monad-defs} shows the type classes and functions that are used by the desugaring.
+
+\begin{figure}
+\begin{verbatim}
+class Monad m where
+  (>>=)  :: m a -> (a -> m b) -> m b
+  return :: a -> m a
+
+class (Monad m) => MonadPlus m where
+  mzero :: m a
+  mplus :: m a -> m a -> m a
+
+class (Monad m) => MonadZip m where
+  mzip :: m a -> m b -> m (a, b)
+
+guard :: MonadPlus m => Bool -> m ()
+guard b = if b then return () else mzero
+\end{verbatim}
+\caption{Type-classes and functions used by monad comprehensions}
+\label{fig:monad-defs}
+\end{figure}
+
+Aside from \ident{Monad}, the desugaring also uses \ident{MonadPlus} and \ident{MonadZip} 
+type-classes. The former is used only for the |guard| function, which is also defined in the 
+figure. The latter is a new class that has been added as a generalization of parallel
+list comprehensions. The name of the function makes it clear that the type-class is a generalization
+of the |zip| function. The patch also defines a \ident{MonadGroup} type-class that generalizes 
+grouping operations inside list comprehensions, but I will not use the feature in this article, 
+so I omitted the class from the figure.
+
+You can find the general desugaring rules in the patch description \cite{bringbackmc}. In this 
+article, we'll just go through the examples from the previous section and examine how the 
+translation looks. The following declaration shows how to implement the \ident{Monad} type class
+for lists:
+
+\begin{verbatim}
+instance Monad [] where
+  source >>= f = concat $ map f source
+  return a = [a]
+\end{verbatim}
+The |>>=| operation, called bind, applies the provided function to each element of the input list 
+and then concatenates the generated lists. The |return| function creates a singleton list containing 
+the specified value. The |mzero| value from \ident{MonadPlus} type-class is an empty list, which 
+means that |guard| returns |[()]| when the argument is |True| and empty list otherwise. Finally,
+the |mzip| function for lists is just |zip|.
+
+Now we have everything we need to look at the desugaring of monad comprehensions. The first
+example from the previous section used multiple generators and can be translated purely in terms
+of \ident{Monad}:
+
+\begin{verbatim}
+animals >>= (\a -> sounds >>= (\s -> 
+  return $ a ++ " " ++ b))
+\end{verbatim}
+Every \textit{generator} is translated to a binding using |>>=|. The operations are nested and
+the innermost operation always returns the result of the output function. The next snippet shows
+what happens when we add predicate to filter the results:
+
+\begin{verbatim}
+animals >>= (\a -> sounds >>= (\s -> 
+  guard (a !! 1 == s !! 1) >>= (\_ -> 
+    return $ a ++ " " ++ s) ))
+\end{verbatim}
+A predicate is translated into a call to the |guard| function in the innermost part of the 
+desugared expression. When the function returns |mzero| value (an empty list), the result of the
+binding will also be |mzero|, so the element for which the predicate doesn't hold will be 
+filtered out. Finally, let's look at the translation of the last example:
+
+\begin{verbatim}
+(animals `mzip` sounds) >>= (\(a, s) -> 
+  return $ a ++ " " ++ s)
+\end{verbatim}
+When we use parallel comprehensions, the inputs of the generators are combined using the |mzip|
+function. The result is passed to the bind operation, which applies the output function to values
+of the combined computation. If we also specified filtering, the |guard| function would be added 
+to the innermost expression as in the previous example.
+
+As you can see, the translation of monad comprehensions is quite simple, but it adds an additional
+expressivity to the syntax for working with monads. In particular, the do notation doesn't provide
+an equivalent syntactic extension for writing parallel comprehensions. Constructs like generalized 
+ordering (using functions of type |m a -> m a|) and generalized grouping (using functions 
+|m a -> m (m a)|) add even more expressivity, but that would be a topic for another article. 
+In the next three sections, I show how we could implement the |mzip| operation for several 
+interesting monads, starting with monadic parsers. At the end of the article, I also briefly 
+consider laws that should hold about the |mzip| operation.
+
+% ==================================================================================================
+
+\section{Composing parsers in parallel}
+What does a \textit{parallel composition of two parsers} mean? Probably the best thing we can do 
+is to run both parsers on the input string and return a tuple with the two results. That sounds
+quite simple, but what is this construct good for? Let's first implement it and then look at 
+some examples. 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Introducing parsers}
+Many of you may already know monadic parsing combinators. I include all definitions that are 
+necessary to build a complete example for two reasons -- to make this article self-contained
+and because there is one minor, but important twist.
+
+A parser is a function that takes the 
+input string and returns a list of possible results. It may be empty (if the parser fails) or 
+contain several items (if there are multiple ways to parse the input). The implementation I use 
+in this article mostly follows the one by Hutton and Meijer \cite{monadparsing}:
+
+\begin{verbatim}
+newtype Parser a
+  = Parser (String -> [(a, Int, String)])
+\end{verbatim}
+The result of parsing is a tuple containing a value of type |a| produced by the parser, a number
+of characters consumed by the parser and the remaining unparsed part of the string. The |Int| value
+is not usually included in parser definitions. We'll need it later in the implementation of |mzip|.
+
+Now that we have a definition of parsers, we can create our first primitive parser and a 
+function that runs parser on an input string and returns the results:
+
+\begin{verbatim}
+item :: Parser Char
+item = Parser (\input -> case input of
+  "" -> []
+  c:cs -> [(c, 1, cs)])
+  
+run :: Parser a -> [a]
+run (Parser p) input = 
+  [ result | (result, _, tail) <- p input, tail == [] ]
+\end{verbatim}
+The |item| parser returns the first character of the input string. When it succeeds, it consumes 
+a single character, so it returns 1 as the second element of the tuple. The |run| function
+applies the underlying function of the parser to a specified input. As specified by the condition
+|tail == []|, the function returns results of those parsers which parsed the entire input.
+The next step is to make the parser monadic.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Implementing the parser monad}
+Parsers are a well known example of \textit{monads} and \textit{monoids}. This means that we can 
+implement both \ident{Monad} and \ident{MonadPlus} type classes. You
+can find the implementation in Figure~\ref{fig:monad-instance}.
+
+\begin{figure}
+\begin{verbatim}
+instance Monad Parser where
+  return a = Parser (\input -> [(a, 0, input)])
+  (Parser p1) >>= f = Parser (\input ->
+    [ (result, n1 + n2, tail) 
+        | (a, n1, input') <- p1 input
+        , let (Parser p2) = f a
+        , (result, n2, tail) <- p2 input' ])
+
+instance MonadPlus Parser where 
+  mzero = Parser (\_ -> [])
+  mplus (Parser p1) (Parser p2) = Parser (\input ->
+    p1 input ++ p2 input)
+\end{verbatim}
+\caption{Instances of \ident{Monad} and \ident{MonadPlus} for parsers}
+\label{fig:monad-instance}
+\end{figure}
+
+The |return| operation returns a single result containing the specified value that doesn't consume
+any input. The |>>=| operation can be implemented using ordinary list comprehensions.
+It runs the parsers in sequence, returns the result of the second parser and consumes the sum of 
+characters consumed by the first and the second parser. The |mzero| operation creates a parser that 
+always fail and |mplus| represents a non-deterministic
+choice between two parsers. 
+
+The two type class instances allow us to use some of the monad comprehension syntax. We can now 
+use the |item| primitive to write a few simple parsers:
+
+\begin{verbatim}
+sat pred = [ ch | ch <- item, pred ch ]
+char ch = sat (ch ==)
+notChar ch = sat (ch /=)
+
+some p = [ a:as | a <- p, as <- many p ]
+many p = some p `mplus` return []
+\end{verbatim}
+
+The |sat| function creates a parser that parses a character matching a specified predicate. 
+The \textit{generator syntax} |ch <- item| corresponds to monadic binding and is desugared 
+into an application of the |>>=| operation. Because the \ident{Parser} type is an instance
+of \ident{MonadPlus}, we can use a guard to apply a predicate such as |pred ch|. The 
+desugared version of the function is:
+
+\begin{verbatim}
+sat pred = item >>= (\ch ->
+  guard (pred ch) >>= (\_ -> return ch))
+\end{verbatim}
+
+The |some| and |many| combinators are mutually recursive. The first one creates a parser that 
+parses one or more occurrences of |p|. We encode it using monad comprehension with two bindings. 
+The parser parses |p| followed by |many p|. The same thing could be written using do notation, but 
+monad comprehensions provide quite elegant and succinct alternative, with a syntactic support for 
+guards (as you can see in the first example).
+
+The order of monadic bindings usually matters. The monad comprehension syntax makes this fact
+perhaps slightly less obvious than the do notation. To demonstrate this, let's look at a parser that
+parses the body of an expression enclosed in brackets:
+
+\begin{verbatim}
+brackets :: Char -> Char -> Parser a -> Parser a
+brackets op cl body = 
+  [ inner 
+      | _ <- char op
+      , inner <- brackets op cl `mplus` body
+      , _ <- char cl ]
+
+skipBrackets = brackets '(' ')' (many item)
+\end{verbatim}
+The combinator takes characters representing opening and closing brackets and a parser for parsing 
+the body inside brackets. It uses a monad comprehension with three binding expressions that parse
+opening brace, the body or more brackets and then the closing brace.
+
+If you run the parser using |run skipBrackets "((42))"| you get a list containing |"42"|, but also 
+|"(42)"|. This is because the |many item| parser can also consume brackets. To correct that, we need
+to write a parser that accepts any character except opening and closing brace. As you'll see 
+shortly, this can be elegantly solved using parallel comprehensions.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Parallel composition of parsers}
+To support parallel monad comprehensions, we need to implement \ident{MonadZip}. 
+As a reminder, the type class defines an operation |mzip| with the following type:
+
+\begin{verbatim}
+mzip :: m a -> m b -> m (a, b)
+\end{verbatim}
+By looking just at the type signature, you can see that the operation can be implemented in terms
+of |>>=| and |return|. This is a reasonable definition for some monads, such as the |Reader| monad,
+but not for all of them. For example, |mzip| for lists uses a different operation. 
+The implementation for parsers in Figure~\ref{fig:monadzip-instance} also isn't expressed using
+other monad primitives.
+
+\begin{figure}
+\begin{verbatim}
+instance MonadZip Parser where 
+  mzip (Parser p1) (Parser p2) = Parser (\input -> 
+    [ ((a, b), n1, tail1) 
+        | (a, n1, tail1) <- p1 input
+        , (b, n2, tail2) <- p2 input
+        , n1 == n2 ])
+\end{verbatim}
+\caption{Instance of \ident{MonadZip} type class for parsers}
+\label{fig:monadzip-instance}
+\end{figure}
+
+The parser created by |mzip| independently parses the input string using both of the parsers.
+It uses list comprehensions to find all combinations of results such that the number of 
+characters consumed by the two parsers was the same. For each matching combination, the parser 
+returns a tuple with the two parsing results. Requiring that the two parsers consume the same 
+number of characters is not an arbitrary decision. It means that the remaining unconsumed strings 
+|tail1| and |tail2| are the same and so we can return any of them. I use a counter instead of 
+comparing strings, because it allows us to work with possibly infinite
+strings. 
+
+Let's get back to the example with parsing brackets. The following snippet uses parallel 
+monad comprehensions to create a version that consumes all brackets:
+
+\begin{verbatim}
+skipAllBrackets = brackets '(' ')' body
+  where body = many [ c | c <- notChar '(' | _ <- notChar ')' ]
+\end{verbatim}
+The parser |body| takes zero or more of any characters that are not opening or closing brackets.
+The parallel comprehension runs two |notChar| parsers on the same input. They both read a single
+character and they succeed if the character is not `(' and `)' respectively. The resulting parser
+succeeds only if both them succeed. Both of the parallel parsers return the same character, so we
+assign the first one to a symbol |c| and return it as the result and ignore the second one.
+
+Another example where this syntax may be useful is validation of inputs. For example, a Cambridge
+phone number consists of 10 symbols, needs to contain only digits and starts with 1223. The new
+syntax allows us to directly encode these three rules:
+
+\begin{verbatim}
+cambridgePhone = 
+  [ n | n <- many (sat isDigit)
+      | _ <- times item 9 
+      | _ <- startsWith (string "1223") ]
+\end{verbatim}
+The encoding is quite straightforward. We need some additional combinators such as |times| that
+repeats a parser specified number of times and |startsWith| that runs a parser and then consumes
+any number of characters. 
+
+We could construct a single parser that recognizes valid Cambridge phone number without using
+|mzip|. The point of this example is that we can quite nicely combine several independent rules,
+which makes the validation code easy to understand and extend.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Parallel composition of context-free parsers}
+
+Monadic parser combinators are very expressive. In fact, they are often \textit{too expressive}, 
+which makes it difficult to implement the combinators efficiently. This was a motivation for
+the development of non-monadic parsers, such as the one by Swierstra \cite{deterparser}, 
+\cite{parsingtutorial}. They are less expressive, but can be more efficient.  
+A weaker interface that can be used for writing parsers is \textit{applicative functor} developed 
+by McBride and Paterson \cite{applicative}. You can find a Haskell type class \ident{Applicative}
+that represents applicative functors in Figure~\ref{fig:applicative}.
+\begin{figure}
+\begin{verbatim}
+class (Functor f) => Applicative f where
+  pure  :: a -> f a
+  (<*>) :: f (a -> b) -> f a -> f b
+\end{verbatim}
+\caption{Definition of the \ident{Applicative} type class}
+\label{fig:applicative}
+\end{figure}
+
+There is also an alternative definition of \ident{Applicative} which uses an operation with 
+the same type signature as our |mzip|. As I explain in the next section, our |mzip| is different
+than the one we could define in terms of |pure| and |<*>|. In some sense, we will be combining
+two different applicative functors in this section. However, we'll get back to this topic later.
+
+The usual applicative parsers allow us to write parsers where the choice of the next parser 
+doesn't depend on the value parsed so far. In terms of formal language theory, they can express 
+only \textit{context-free} languages. This is still sufficient for many practical purposes. For 
+example our earlier |brackets| parser can be written using the applicative combinators:
+
+\begin{verbatim}
+brackets op cl body = 
+  pure (\_ inner _ -> inner)
+    <*> char op
+    <*> brackets op cl body `mplus` body
+    <*> char cl
+\end{verbatim}
+The example creates a parser that always succeeds and returns a function using the |pure| 
+combinator. Then it applies this function (contained in a parser) to three arguments (produced
+by the three parsers). You don't need to understand the example in details. The important
+point is -- if we have a comprehension where the next \textit{generator} in a sequence
+doesn't depend on the value produced by the previous one, we can rewrite it using the 
+\ident{Applicative} interface. For parsers, this means that we're parsing just a 
+\textit{context-free grammar}.
+
+The interesting question is, what operation does |mzip|, as we defined it in the previous section,
+represent for context-free grammars? A language we obtain if parses for two other languages both 
+succeed is an \textit{intersection} of the two languages. An intersection of two context-free 
+languages is not context-free, which can be demonstrated using the following example:
+
+\[ 
+A = \{ a^m b^m c^n \arrowvert m, n \geq 0 \} 
+\qquad
+B = \{ a^n b^m c^m \arrowvert m, n \geq 0 \} 
+\]
+\[ 
+A \cap B = \{ a^m b^m c^m \arrowvert m \geq 0 \}
+\]
+
+The language $A$ accepts words that start with some number of `a' followed by the same
+number of `b' and then arbitrary number of `c' symbols. The language $B$ is similar, but it
+starts with a group of any length followed by two groups of the same lengths. Both of the
+languages are context-free. In fact, our parser |brackets| can be used to parse the two 
+character groups with same lengths.
+
+The intersection $A \cap B$ is not context-free \cite{cflintersect}, but we can easily
+encode it using parallel composition of parsers. We don't need the full power of monads
+to parse the first group and calculate its length. It could be implemented just in terms of
+\ident{Applicative} and |mzip|, but we use the nicer monad comprehension syntax:
+
+\begin{verbatim}
+[ True | _ <- many $ char 'a', _ <- brackets 'b' 'c' unit
+       | _ <- brackets 'a' 'b' unit, _ <- many $ char 'c' ]
+  where unit = return ()
+\end{verbatim}
+The example uses both parallel and sequential binding, but the sequential composition doesn't
+contain dependencies on previously parsed results. It uses |brackets| to parse two groups of the
+same length, followed (or preceded) by |many| to consume the remaining group of arbitrary length.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Applicative and parallel parsers}
+Before moving to the next example, let's take a look how |mzip| relates to applicative functors.
+An alternative definition of applicative functor (\cite{applicative} section 7) uses an operation
+$\star$ with exactly the same type signature as |mzip|. Since applicative functors generalize
+monads, we can always define $\star$ in terms of |>>=| and |return|. 
+
+\UndefineShortVerb{\|}
+\DefineShortVerb{\_}
+
+Judging by the type, we could use $\star$ as our _mzip_ operation, but this definition may not
+always be intuitively right. Referring to the intuition is always tricky, so I'll express my 
+expectations more formally in terms of laws at the end of the article. However, if we always just 
+used $\star$ as the _mzip_ operation, we wouldn't get any additional expressive power, so there 
+would be no point in using parallel monad comprehensions. The expression _[ e | a <- e1 | b <- e2]_
+would mean exactly the same thing as _[ e | a <- e1, b <- e2]_.
+
+\UndefineShortVerb{\_}
+\DefineShortVerb{\|}
+
+This definitely isn't the case for lists. The definition of $\star$ for the usual \ident{List}
+monad would give us a Cartesian product of lists. This isn't very useful, because we can get that
+behavior using multiple generators. Instead, list comprehensions use zipping of lists, which comes 
+from a different applicative functor, namely \ident{ZipList}.
+
+The example with parsers is similar. The implementation of $\star$ would give us a sequential 
+composition of parsers. This wouldn't be very useful, so I defined |mzip| as the intersection of 
+parsers. This is an interesting operation that adds expressive power to the language. The |mzip| 
+operation also defines an instance of applicative functor for parsers, but a different one.
+
+For the fans of category theory, the $\star$ operation is a \textit{monoidal functor} defined by
+the monad we're working with. The |mzip| operation is also a \textit{monoidal functor}, but it may 
+be a different one. One of the additional laws that we can require about |mzip| is commutativity 
+(more about that later), which means that |mzip| should be a \textit{symmetric monoidal functor}.
+
+% ==================================================================================================
+
+\section{Parallelizing cooperative computations}
+
+As the name \textit{parallel} monad comprehensions suggests, we can use the syntax for 
+running computations in parallel. Unlike comprehensions with multiple generators, parallel
+comprehensions cannot have any dependencies between the composed bindings. This means that the 
+computations can be evaluated independently. 
+
+In this section, I demonstrate the idea using a poor man's concurrency monad inspired by Claessen's
+work \cite{poorman}. The monad can be used to implement a lightweight cooperative concurrency. When 
+running two computations in parallel, we can allow interleaving of atomic actions from the two 
+threads.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Modelling resumable computations}
+
+The example I demonstrate here models computations using \textit{resumptions}. This concept is 
+slightly simpler than the original poor man's concurrency monad (which is based on continuations). 
+A resumption is a computation that has either finished and produced some value or has not
+finished, in which case it can run one atomic step and produce a new resumption:
+
+\begin{verbatim}
+data Monad m => Resumption m r 
+  = Step (m (Resumption m r))
+  | Done r
+\end{verbatim}
+The type is parametrized over a monad and a return type. When evaluating a resumption, we 
+repeatedly run the computation step-by-step. While evaluating, we perform the effects allowed by
+the monad |m| until we eventually get a result of type |r|. If you're interested in more details 
+about the |Resumption| type, you can find a similar definition in Harrison's cheap threads 
+\cite{cheapthreads} and Papaspyrou's resumption transformer \cite{resmonad}.
+
+Now that we have a type, we can write a function to create a |Resumption| that runs a single
+atomic action and then completes and a function that runs a |Resumption|:
+
+\begin{verbatim}
+run :: Monad m => Resumption m r -> m r
+run (Done r) = return r
+run (Step m) = m >>= run
+
+action :: Monad m => m r -> Resumption m r
+action a = Step [ Done r | r <- a ]
+\end{verbatim}
+The |run| function takes a resumption that may perform effects specified by the monad |m| and it
+runs the resumption inside the monad until it reaches |Done|. The function runs the whole 
+computation sequentially (and it cannot be implemented differently). The cooperative concurrency
+can be added later by creating a combinator that interleaves the steps of two |Resumption|
+computations.
+
+The |action| function is quite simple. It returns a |Step| that runs the specified action 
+inside the monad |m| and then wraps the result using the |Done| constructor. I implemented the
+function using monad comprehensions, but we could also use the usual do notation, which may be
+a better fit for effectful computations:
+
+\begin{verbatim}
+action' a = Step $ do r <- a; return (Done r)
+\end{verbatim}
+The function does exactly the same thing as the previous version. The comprehension syntax was 
+slightly more succinct, because the computation ends with |return|, which is the standard structure
+of comprehensions.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Implementing the resumption monad}
+You can see the implementation of the \ident{Monad} type class in Figure~\ref{fig:poorman-instance}. 
+The |return| operation creates a new resumption in the ``done'' state and contains the specified 
+value. The |>>=| operation constructs a resumption that gets the result of the 
+first resumption and then calls the function |f|. When the left parameter is |Done|, we 
+apply the function to the result and wrap the application inside |return| (because the function
+is pure) and |Step|. When the left parameter is |Step|, we create a resumption that runs the
+step and then uses |>>=| recursively to continue running steps from the left argument until it 
+finishes.
+
+\begin{figure}
+\begin{verbatim}
+instance Monad m => Monad (Resumption m) where
+  return a = Done a
+  (Done r) >>= f = Step $ return (f r)
+  (Step s) >>= f = Step $ do
+    next <- s
+    return $ next >>= f
+
+instance MonadTrans Resumption where
+  lift = action
+\end{verbatim}
+\caption{Instances of \ident{Monad} and \ident{MonadTrans} 
+  for resumptions.}
+\label{fig:poorman-instance}
+\end{figure}
+
+The listing also defines an instance of \ident{MonadTrans} to make |Resumption| a monad transformer.
+The |lift| function takes a computation in the monad |m| and turns it into a computation in the 
+|Resumption| monad. This is exactly what our function for wrapping atomic actions does.
+
+Equipped with the two type class instances and the |run| function, we can write some interesting
+computations. The following function creates a computation that runs for the specified number of
+steps, prints some string in each step and then returns a specified value:
+
+\begin{verbatim}
+printLoop :: String -> Int -> a -> Resumption IO a
+printLoop str count result = do
+  lift $ putStrLn str
+  if count == 1 then return result
+  else printLoop str (count - 1) result
+
+cats = run $ printLoop "meow" 3 "cat"
+\end{verbatim}
+The function is written using the do notation. It first prints the specified string, using 
+|lift| to turn the |IO ()| action into a single-step |Resumption IO ()|. When the counter reaches
+one, it returns the result; otherwise it continues looping.
+
+The snippet defines a simple computation |cats| that prints ``meow'' three times and then 
+returns a string ``cat''. The computations created by |printLoop| are not fully opaque. If we have 
+two computations like |cats|, we can treat them as sequences of steps and interleave them. 
+This is what the |mzip| operation does.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Parallel composition of resumptions}
+
+If we have two resumptions, we can compose them to run in sequence either using the do notation or
+using a monad comprehension with two generators. To run them in parallel, we need to implement
+interleaving of the steps as shown in Figure~\ref{fig:poorman-zip}. 
+
+\begin{figure}
+\begin{verbatim}
+instance Monad m => MonadZip (Resumption m) where
+  mzip (Done a) (Done b) = Done (a, b)
+  mzip sa sb = Step [ mzip a b | a <- step sa, b <- step sb ]
+    where step (Done r) = return $ Done r 
+          step (Step sa) = sa
+\end{verbatim}
+\caption{Instance of \ident{MonadZip} that composes resumptions in parallel}
+\label{fig:poorman-zip}
+\end{figure}
+
+The result of |mzip| is a resumption that consists of multiple steps. In each step, it performs
+one step of both of the resumptions given as arguments. When it reaches a state when both of the
+resumptions complete and produce results, it returns a tuple containing the results using |Done|.
+A step is performed using an effectful |step| function. To keep the implementation simple, we keep
+applying |step| to both of the resumptions and then recursively combine the results. Applying
+|step| to a resumption that has already completed isn't a mistake. This operation doesn't do 
+anything and just returns the original resumption (without performing any effects).
+
+Once we define |mzip|, we can start using the parallel comprehension syntax for working with 
+resumptions. The next snippet demonstrates two ways of composing resumptions. In both examples, we 
+compose a computation that prints ``meow'' two times and then returns ``cat'' with a computation 
+that prints ``woof'' three times and then returns ``dog'':
+
+\begin{verbatim}
+animalsSeq = 
+  [ c ++ " and " ++ d
+     | c <- printLoop "meow" 2 "cat" 
+     , d <- printLoop "woof" 3 "dog" ]
+
+animalsPar = 
+  [ c ++ " and " ++ d
+     | c <- printLoop "meow" 2 "cat" 
+     | d <- printLoop "woof" 3 "dog" ]
+\end{verbatim}
+
+The only difference between the two examples is that the first one composes the operations using 
+multiple generators (separated by comma) and the second one uses parallel comprehensions (separated
+by bar).
+
+When you run the first example, the program prints meow, meow, woof, woof, woof and then returns 
+a string ``cat and dog''. The second program interleaves the steps of the two computations and 
+prints meow, woof, meow, woof, woof and then returns the same string.	
+
+% ==================================================================================================
+
+\section{Composing computations in parallel}
+
+In the previous section, we used the parallel comprehension syntax to create computations that 
+model parallelism using resumptions. Resumptions can be viewed as lightweight cooperative threads.
+They are useful abstraction, but the simple implementation in the previous section does not give
+us any speed-up on multi-core CPU. This section will follow a similar approach, but we look at how 
+to implement actual parallelism based on \textit{evaluation strategies}. 
+
+Marlow et al. \cite{strategies-new} introduced an \ident{Eval} monad for explicitly 
+specifying the evaluation order. I start the section by briefly introducing the monad, so you don't 
+need to worry if you're not familiar with it already. Then I'll demonstrate how to define a 
+\ident{MonadZip} instance for this monad. This way, we can use the parallel 
+comprehension syntax for running computations actually in parallel.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Introducing evaluation-order monad}
+
+The evaluation-order monad is represented by a type |Eval a|. When writing code inside the monad,
+we can use several functions of type |a -> Eval a| that are called \textit{strategies}. These
+functions take a value of type |a|, which may be unevaluated, and wrap it inside the monad.
+A strategy can specify how to evaluate the (unevaluated) value. The two most common strategies
+are |rpar| and |rseq| (both are functions of type |a -> Eval a|). The |rpar| strategy starts 
+evaluating the value in background and |rseq| evaluates the value eagerly before returning. 
+
+A typical pattern is to use the do notation to spawn one computation in parallel and then 
+run another computation sequentially. This way we can easily parallelize two function calls:
+
+\begin{verbatim}
+fib38 = runEval $ do 
+  a <- rpar $ fib 36
+  b <- rseq $ fib 37
+  return $ a + b
+\end{verbatim}
+The example shows how to calculate 38$^\text{th}$ Fibonacci number. It starts calculating 
+|fib 36| in parallel with the rest of the continuation and then calculates |fib 37| sequentially.
+The do notation creates a value of type |Eval Integer|. We then pass the value to |runEval|, 
+which returns the wrapped value. Because we used the |rpar| and |rseq| combinators when constructing 
+the computation, the returned value will be already evaluated.
+
+However, it is worth noting that the |return| operation of the monad doesn't specify any evaluation 
+order. The function |runEval . return| is just an identity function that doesn't force evaluation 
+of the argument. The evaluation order is specified by additional combinators such as |rpar|.
+
+The \ident{Eval} monad is implemented in the \ident{parallel} package \cite{parallelpkg} and very 
+well explained in the paper by Marlow et al. \cite{strategies-new}. You can find the definition of 
+|Eval a| type and it's monad instance in Figure~\ref{fig:eval-monad}. We don't need to know how 
+|rpar| and |rseq| work, so we omit them in the listing. 
+
+\begin{figure}
+\begin{verbatim}
+data Eval a = Done a
+
+runEval :: Eval a -> a
+runEval (Done x) = x
+
+instance Monad Eval where
+  return x = Done x
+  Done x >>= k = k x
+\end{verbatim}
+\caption{ Evaluation-order monad \ident{Eval} with a \ident{Monad} instance }
+\label{fig:eval-monad}
+\end{figure}
+
+The |Eval a| type is simple. It just wraps a value of type |a|. The |runEval| function unwraps 
+the value and the \ident{Monad} instance implements composition of computations in the 
+usual way. The power of the monad comes from the annotations we can add. When using the monad, 
+we're transforming values of type |a| into values of type |Eval a|. When doing so, we can specify 
+the evaluation strategy. The strategy is usually given using combinators, but if we add an 
+instance of the \ident{MonadZip} class, we can also specify the evaluation order using the monad 
+comprehension syntax.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Specifying parallel evaluation order}
+
+The |mzip| operator for the evaluation order monad encapsulates a common pattern that runs two
+computations in parallel. We've seen an example in the previous section -- the first 
+computation is started using |rpar| and the second one is evaluated eagerly in parallel using |rseq|.
+You can find the implementation in Figure~\ref{fig:eval-zip}.
+
+\begin{figure}
+\begin{verbatim}
+instance MonadZip Eval where
+  mzip ea eb = do
+    a <- rpar $ runEval ea
+    b <- rseq $ runEval eb
+    return (a, b)
+\end{verbatim}
+\caption{Instance of \ident{MonadZip} for parallelizing tasks}
+\label{fig:eval-zip}
+\end{figure}
+
+A tricky aspect of |Eval| is that it may represent computations with explicitly
+specified evaluation order (created, for example, using |rpar|). We can also create computations 
+without specifying evaluation order using |return|. The fact that |return| doesn't evaluate the 
+values makes it possible to implement the |mzip| function, because the required type signature is 
+|Eval a -> Eval b -> Eval (a, b)|.
+
+The two arguments already have to be values of type |Eval|, but we want to specify the evaluation
+order using |mzip| after creating them. If all |Eval| values were already evaluated, then the |mzip|
+operation couldn't have any effect. However, if we create values using |return|, we can then apply
+|mzip| and specify how they should be evaluated later. This means that |mzip| only works for
+|Eval| computations created using |return|.
+
+Once we understand this, implementing |mzip| is quite simple. It extracts the underlying 
+(unevaluated) values using |runEval|, specifies the evaluation order using |rpar| and |rseq| and 
+then return a result of type |Eval (a, b)|, which now carries the evaluation order specification. 
+Let's look how we can write a sequential and parallel version of a snippet that calculates
+38$^\text{th}$ Fibonacci number:
+
+\begin{verbatim}
+fibTask n = return $ fib n
+
+fib38seq = runEval [ a + b | a <- fibTask 36
+                           , b <- fibTask 37 ]
+fib38par = runEval [ a + b | a <- fibTask 36
+                           | b <- fibTask 37 ]
+\end{verbatim}
+
+The snippet first declares a helper function |fibTask| that creates a delayed value using 
+the sequential |fib| function and wraps it inside the |Eval| monad without specifying evaluation
+strategy. Then we can use the function as a source for generators in the monad comprehension
+syntax. The first example runs the entire computation sequentially -- aside from some wrapping
+and unwrapping, there are no evaluation order specifications. The second example runs the 
+two sub-computations in parallel. The evaluation order annotations are added by the |mzip| 
+function from the desugared \textit{parallel comprehension} syntax.
+
+To run the program using multiple threads, you need to compile it using GHC with the |-threaded|
+option. Then you can run the resulting application with command line arguments |+RTS -N2 -RTS|,
+which specifies that the runtime should use two threads. I measured the performance on a dual-core 
+Intel Core 2 Duo CPU (2.26GHz). The time needed to run the first version was approximately 13 
+seconds while the second version completes in 9 seconds.
+
+\subsection{Writing parallel algorithms}
+The ~1.4x speedup is less than the maximal 2x speedup, because the example parallelizes two 
+calculations that do not take equally long time. To generate a better potential for parallelism,
+we can implement recursive |pfib| that splits the computation into two parallel branches 
+recursively until it reaches some threshold:
+
+\begin{verbatim}
+pfib :: Integer -> Eval Integer
+pfib n | n <= 35 = return $ fib n
+pfib n = [ a + b | a <- pfib $ n - 1 
+                 | b <- pfib $ n - 2 ]
+\end{verbatim}
+I hope you'll agree that the declaration looks quite neat. A nice consequence of using parallel 
+comprehensions is that we can see which parts of the computation will run in parallel without any 
+syntactic noise. We just replace a comma with a bar to get a parallel version! The compiler also 
+prevents us from trying to parallelize code that cannot run in parallel, because of data 
+dependencies. For example, let's look at the Ackermann function: 
+
+\begin{verbatim}
+ack :: Integer -> Integer -> Eval Integer
+ack 0 n = return $ n + 1
+ack m 0 = ack (m - 1) 1
+ack m n = [ a | na <- ack m (n - 1)
+              , a <- ack (m - 1) na ]
+\end{verbatim}
+The Ackermann function is a well-known function from computability theory. It is interesting, 
+because it grows really fast (as a result, it cannot be expressed using primitive form of 
+recursion). For example, the value of |ack 4 2| is $2^{65536} - 3$. 
+
+We're probably not going to be able to finish the calculation, no matter how many cores our CPU 
+has. However, we can still try to parallelize the function by replacing the two sequential 
+generators with parallel comprehension:
+
+\begin{verbatim}
+ack m n = [ a | na <- ack m (n - 1)
+              | a <- ack (m - 1) na ]
+\end{verbatim}
+If you try compiling this snippet, you get an error message saying ``Not in scope: na''. We can 
+easily see what went wrong if we look at the desugared version:
+
+\begin{verbatim}
+(ack m (n - 1)) `mzip` (ack (m - 1) na) >>= (\(na, a) -> a)
+\end{verbatim}
+The problem is that the second argument to |mzip| attempts to access the value |na| which is 
+defined later. The value is the result of the first expression, so we can access it only after 
+both of the two parallelized operations complete. 
+
+In other words, there is a data dependency between the computations that we're trying to 
+parallelize. If we were not using parallel monad comprehensions, we could mistakenly think 
+that we can parallelize the function and write the following:
+
+\begin{verbatim}
+ack m n = runEval $ do 
+  na <- rpar $ ack m (n - 1)
+  a <- rseq $ ack (m - 1) na
+  return a
+\end{verbatim}
+This would compile, but it wouldn't run in parallel! The value |na| needs to be evaluated before 
+the second call, so the second call to |ack| will block until the first one completes. This 
+demonstrates a nice aspect of writing parallel computations using the comprehension syntax. 
+Not only that the syntax is elegant, but the desugaring also performs a simple sanity check on our code.
+
+% ==================================================================================================
+
+\section{Parallel comprehension laws}
+I intentionally postponed the discussion about laws to the end of the article. So far, we looked
+at three different implementations of the |mzip| operation. I discussed some of the expectations
+informally to aid the intuition about the operation. The type of |mzip| partially specifies how 
+the operation should behave, but not all well typed implementations are intuitively right.
+
+To my understanding, the laws about |mzip| are still subject to discussion, although some were 
+already proposed in the discussion about the GHC patch \cite{bringbackmc}. I hope to contribute to
+the discussion in this section. We first look at the laws that can be motivated by category theory
+behind the operation and then discuss additional laws inspired by the work on 
+\fsharp \ joinads.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Basic laws of parallel bindings}
+As already briefly mentioned, the |mzip| operation can be viewed as a \textit{natural 
+transformation} defined by some \textit{monoidal functor} \cite{monoidalfunctor}. In practice,
+this means that the |mzip| operation should obey two laws. The first one is usually called 
+\textit{naturality} and it specifies the behavior of |mzip| with respect to the |map| function of 
+a monad (the function can be implemented in terms of bind and return and corresponds to 
+|liftM| from Haskell base library). The second law is \textit{associativity} and we can express it 
+using a helper function $assoc((a,b),c)=(a,(b,c))$:
+
+\begin{equation}
+  \text{map} \: (f \times g) \: (\text{mzip} \: a \: b) \equiv \text{mzip} \: (\text{map} \: f \: a) \: (\text{map} \: g \: b)
+  \label{law:naturality}
+\end{equation}
+\begin{equation}
+  \text{mzip} \: a \: (\text{mzip} \: b \: c) \equiv \text{map} \: \text{assoc} \: (\text{mzip} \: (\text{mzip} \: a \: b) \: c) 
+  \label{law:assoc}
+\end{equation}
+The naturality law (\ref{law:naturality}) specifies that we can change the order of applying 
+|mzip| and |map|. The equation has been already identified as a law in the discussion about the
+patch \cite{bringbackmc}. The law is also required by \textit{applicative functors} 
+\cite{applicative} -- this is not surprising as applicative functors are also based on monoidal 
+functors from category theory. This is quite common law that is also required by 
+\textit{applicative functors}.
+
+\UndefineShortVerb{\|}
+\DefineShortVerb{\_}
+
+The \textit{associativity} law (\ref{law:assoc}) is also very desirable. When we write a 
+comprehension such as _[e | a <- m1 | b <- m2 | c <- m3]_, the desugaring first needs to zip some
+of the three inputs and then add the third one, because _mzip_ is a binary operation. The order
+of zipping feels like an implementation detail, but if we don't require associativity, it may 
+affect the meaning of our code. This can lead to a very unexpected behavior.
+
+In category theory, a monoidal functor also comes with a special value called 
+\textit{unit}. If we combine unit with any other value using _mzip_, we can recover the original
+value using _map snd_. Every applicative functor in Haskell defines a unit. For example,
+the unit value for \ident{ZipList} is an infinite list of _()_ values. If we similarly extended 
+\ident{MonadZip} with _munit_, the expression _[ e | a <- m ]_ would be equivalent to
+_[ e | a <- m | () <- munit]_. It is important to realize that the computation created using monadic 
+_return_ isn't the same thing as unit! For lists, _return ()_ creates a singleton list. The 
+_return_ operation is unit of a monoidal functor defined by the monad, but the unit associated 
+with |mzip| belongs to a different monoidal functor! 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Symmetry of parallel binding}
+
+Another sensible requirement for _mzip_ (which exists in \fsharp \ joinads) is that reordering of 
+the arguments only changes the order of elements in the resulting tuple. In theory, this means that 
+the \textit{monoidal functor} defining _mzip_ is \textit{symmetric}. We can specify the law using a 
+helper function $swap(a,b)=(b,a)$:
+
+\begin{equation}
+  \text{mzip} \: a \: b \equiv \text{map} \: \text{swap} \: (\text{mzip} \: a \: b)
+  \label{law:sym}
+\end{equation}
+The \textit{symmetry} law (\ref{law:sym}) specifies that _[(x, y) | x <- a | y <- b]_ should mean 
+the same thing as _[(x, y) | y <- b | x <- a]_. This may look like a very strong requirement, but 
+it fits quite well with the usual intuition about the _zip_ operation and parallel monad 
+comprehensions. The symmetry law holds for lists, parsers and the evaluation order monad. For poor 
+man's concurrency monad, it holds if we treat effects that occur within a single step of the 
+evaluation as unordered (which may be a reasonable interpretation). For some monads, such as the
+_State_ monad, it is not possible to define a symmetric _mzip_ operation. 
+
+\UndefineShortVerb{\_}
+\DefineShortVerb{\|}
+
+The three laws that we've seen so far are motivated by the category theory laws about 
+\textit{monoidal functors}, or \textit{symmetric monoidal functor} that defines our |mzip| 
+operation. However, we also need to relate the functor in some way to the monad that we're 
+combining it with.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Relations with additional operations}
+
+The discussion about the patch \cite{bringbackmc} suggests one more law that relates the |mzip|
+operation with the |map| operation of the monad. It is called \textit{information preservation}
+and it looks as follows:
+
+\begin{equation}
+  \text{map} \: \text{fst} \: (\text{mzip} \: a \: b) \equiv a \equiv \text{map} \: \text{snd} \: (\text{mzip} \: b \: a)
+  \label{law:ipreserve}
+\end{equation}
+
+The law specifies that combining a computation with some other computation using |mzip| and then 
+recovering the original form of the value using |map| doesn't lose information. This laws is a bit 
+tricky though. For example, it doesn't hold for lists if $a$ and $b$ are lists of different length. 
+The |zip| function restricts the length of the result to the length of the shorter list. Similarly, it 
+doesn't hold for parsers (from the first section) that consume different number of characters. 
+
+However, the law expresses an important requirement -- when we combine certain computations, it should be
+possible to recover the original components. A similar law holds about applicative functors, but with 
+a slight twist. Instead of zipping two arbitrary monadic values, the law zips an arbitrary value with
+\textit{unit}. For lists, unit is an infinite list, so the law holds.
+
+Ideally, we'd like to say that combining two values with the same structure creates a new value
+which also has the same structure. There is no way to refer to the ``structure'' of a monadic value, 
+but we can create such values using the |map| function. This weaker law holds for both lists and 
+parsers. Additionally, we can also describe the case when one of the two computations is |mzero| and
+when both of them are created using |return|:
+
+\begin{equation}
+  \text{map} \: \text{fst} \: (\text{mzip} \: a \: (\text{map} f a)) \equiv a \equiv \text{map} \: \text{snd} \: (\text{mzip}\: (\text{map} \: g \: a) \: a)
+  \label{law:weakipres}
+\end{equation}
+\begin{equation}
+  \text{map} \: \text{fst} \: (\text{mzip} \: a \: \text{mzero}) \equiv mzero \equiv \text{map} \: \text{snd} \: (\text{mzip} \: \text{mzero} \: a)
+  \label{law:zero}
+\end{equation}
+\begin{equation}
+  \text{mzip} \: (\text{return} \: a) \: (\text{return} \: b) \equiv \text{return} \: (a, b)
+  \label{law:unitmerge2}
+\end{equation}
+
+The first law (\ref{law:weakipres}) is quite similar to the original law (\ref{law:ipreserve}).
+The only difference is that instead of zipping with an arbitrary monadic value $b$, we're zipping $a$ 
+with a value constructed using |map| (for any complete functions $f$ and $g$). This means that the 
+actual value(s) that the monadic value contains (or produces) can be different, but the structure will 
+be the same, because well-behaved |map| preserves the structure. 
+
+The second law (\ref{law:zero}) specifies that |mzero| is the \textit{zero element} with respect to 
+|mzip|. It looks almost necessary, because |mzero| with type |m a| doesn't contain any value of 
+type |a|, so there is no way we could construct a value of type |(a, b)|. The law complements the 
+first law (\ref{law:weakipres}), but it is not difficult to see that it would contradict with the 
+original \textit{information preservation} (\ref{law:ipreserve}).
+
+\UndefineShortVerb{\|}
+\DefineShortVerb{\_}
+
+Finally, the third law (\ref{law:unitmerge2}) describes how _mzip_ works with respect to the monadic 
+_return_ operation. This is interesting, because we're relating _mzip_ of one applicative functor with 
+the unit of another applicative functor (defined by the monad). The law isn't completely arbitrary. 
+An equation with a similar structure is required for \textit{causal commutative arrows} \cite{causalarr}.
+In terms of monad comprehension syntax, the law says that _[ e | a <- return e1 | b <- return e2 ]_ 
+is equivalent to _[ e | (a, b) <- return (e1, e2)]_.
+
+\UndefineShortVerb{\_}
+\DefineShortVerb{\|}
+
+I believe that the three laws I proposed in this section partly answer the question how to relate
+the two structures combined by parallel monad comprehensions -- the \ident{MonadPlus} type class
+with the symmetric monoidal functor that defines |mzip|.
+
+% ==================================================================================================
+
+\section{Conclusions}
+After some time, monad comprehensions are back in Haskell! The recent GHC patch makes them even 
+more useful by generalizing additional features of list comprehensions including parallel binding 
+and the support for operations like ordering and grouping. In this article, I focused on the first 
+generalization, but the remaining two are equally interesting.
+
+We looked at three examples: parallel composition of parsers (which applies 
+parsers on the same input), parallel composition of monads for cooperative concurrency (which interleaves
+the steps of computations) and a parallel composition of evaluation order monads (which runs two 
+computations in parallel). Some of the examples are inspired by my previous work on joinads that add 
+similar language extension to \fsharp. The \fsharp \ version includes an operation very similar to 
+|mzip| from the newly included \ident{MonadZip} type class. I also proposed several laws -- some of 
+them inspired by category theory and some of them inspired by my work on \fsharp \ joinads -- hoping 
+that this article may contribute to the discussion about the laws required by \ident{MonadZip}.
+
+\subsection{Acknowledgements}
+Thanks to Alan Mycroft for inspiring discussion about some of the monads demonstrated in this article
+and to Dominic Orchard for many useful comments on a draft of the article as well as discussion
+about category theory and the |mzip| laws.
+
+\bibliography{CompreFun}
+
+\end{document}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

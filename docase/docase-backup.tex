@@ -1,0 +1,2057 @@
+\documentclass[preprint]{sigplanconf}
+
+%include polycode.fmt
+
+\usepackage{amsmath}
+\usepackage{mathpartir}
+\usepackage{multicol}
+\usepackage{color}
+\usepackage{verbatim}
+
+\begin{document}
+
+
+\conferenceinfo{Haskell Symposium '11}{22 September, Tokyo.} 
+\copyrightyear{2011} 
+\copyrightdata{[to be supplied]} 
+
+%\titlebanner{Unpublished draft}        % These are ignored unless
+%\preprintfooter{short description of paper}   % 'preprint' option specified.
+
+\title{Extending monads with pattern matching}
+%\subtitle{(Working title)}
+
+\authorinfo{Tomas Petricek \and Alan Mycroft}
+           {University of Cambridge}
+           {\{tomas.petricek, am\}@@cl.cam.ac.uk}
+
+\authorinfo{Don Syme}
+           {Microsoft Research Cambridge}
+           {don.syme@@microsoft.com}
+
+\maketitle
+
+\begin{abstract}
+Sequencing of effectful computations can be neatly captured using monads and elegantly written using 
+@do@ notation. In practice such monads often allow additional ways of composing computations, 
+which have to be written explicitly using combinators.
+
+We identify joinads, an abstract notion of computation that is stronger than monads and captures
+many such ad-hoc extensions. In particular, joinads are monads with three additional operations: 
+one of type |m a -> m b -> m (a, b)| captures various forms of \textit{parallel composition}, 
+one of type |m a -> m a -> m a| that is inspired by \textit{choice} and one of type |m a -> m (m a)| 
+that captures \textit{aliasing} of computations. Algebraically, the first two operations form a 
+near-semiring with commutative multiplication.
+
+We introduce @docase@ notation that can be viewed as a monadic version of @case@. Joinad laws
+make it possible to prove various syntactic equivalences of programs written using @docase@ 
+that are analogous to equivalences about @case@. Examples of joinads that benefit from the notation
+include speculative parallelism, waiting for a combination of user interface events, but also 
+encoding of validation rules using the intersection of parsers. 
+\end{abstract}
+
+
+% Sequential monadic code can be elegantly written using the @do@ notation, but many monadic 
+% computations are not strictly sequential. Other forms of composition have to be written explicitly 
+% using combinators, which makes code less readable and the results are difficult to use in other 
+% languages. This is becoming increasingly important as monads are more often used for tasks such as 
+% parallel, concurrent and reactive programming.
+
+% We introduce docase notation that enables pattern matching on monadic values. The notation can 
+% be used with any monad that provides two additional combinators. \textit{Parallel composition} of 
+% type |m a -> m b -> m (a, b)| may run the two arguments in parallel and \textit{choice} of type 
+% |m a -> m a -> m a| may choose the first available value. The actual meaning differs for each monad, 
+% but we derive laws that guarantee an intuitive semantics similar to case. We use the notation 
+% to program speculative parallelism, encode waiting for a combination of user interface events, but 
+% also for encoding of validation rules using the intersection of parsers. 
+
+
+
+\category{D.3.3}{Language Constructs and Features}{Control structures}
+\category{F.1.2}{Models of Computation}{Parallelism and concurrency}
+
+\terms
+Languages, Theory
+
+% \keywords
+% keyword1, keyword2
+
+% --------------------------------------------------------------------------------------------------
+%format ^ = " "
+%format ^^ = "\;"
+%format instancesem_ = "\mathbf{instance_{sem}}$ \ $"
+%format docase_ = "\mathbf{docase}"
+%format mcase_ = "\mathbf{mcase}"
+%format inf_ = "\infty"
+%format forall_ = "\forall"
+%format bot_ = "\bot"
+%format sp_  = "$ \ $"
+%format smp_  = "$\,$"
+%format ssp_  = "$ \qquad \quad $"
+%format lsp_  = "\\[-17pt]"
+%format neq_ = "\neq"
+%format morelse_ = "\oplus"
+%format mplus_ = "\oplus"
+%format pi_ = "\pi"
+%format mzip_ = "\otimes"
+%format pfail_ = "\bullet"
+%format and_ = "\mathbf{and}"
+%format star_ = "\star"
+%format diamond_ = "\diamond"
+%format sub(a) = "_{" a "}"
+%format sup(a) = "^{" a "}"
+%format sm(a) = "\mathopen{\llbracket} " a "\mathclose{\rrbracket} "
+%format tsm(a) = "\mathopen{\langle} " a "\mathclose{\rangle} "
+
+\newcommand{\ident}[1]{{\normalfont\sffamily #1}}
+\newcommand{\code}[1]{{\normalfont\ttfamily #1}}
+\newcommand{\mzip}[0]{\otimes}
+\newcommand{\morelse}[0]{\oplus}
+\newcommand{\mzero}[0]{\text{mzero}}
+\newcommand{\map}[0]{\text{map}}
+\newcommand{\mduplicate}[0]{\text{mdup}}
+\newcommand{\mplus}[0]{\oplus}
+\newcommand{\fsharp}[0]{F$^\#$}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO] #1}}
+
+% ==================================================================================================
+
+\section{Introduction}
+Monads are traditionally used for embedding of sequential computations into lazy functional code, 
+but many recent uses go well beyond sequencing of state or computations. Monads have been used for 
+the exact opposite---to explicitly specify parallelism. This is done by taking a core sequential 
+monad and providing additional combinators that increase the expressive power beyond sequencing.
+
+Monads for concurrent \cite{poorman} and parallel programming \cite{parmonad} support forking a 
+computation and synchronizing computations \cite{chp-monad}. A monad for user-interface programming 
+includes combinators for merging events from various sources \cite{imperative-streams}. These 
+ad-hoc extensions are extremely useful, but they are not uniform. Developers have to understand 
+different combinators for every computation and they lose the syntactic support provided by @do@ notation.
+
+This paper discusses \textit{joinads}---an abstract notion of computations that extends monads.
+Joinads capture a pattern that appears in many monadic computations with an additional expressive 
+power that goes beyond sequencing. We presented an earlier form of joinads in \fsharp \cite{joinads}. 
+This paper makes several novel findings, but our first contribution to Haskell is similar to the 
+earlier work in \fsharp:
+
+\begin{itemize}
+\item  We show how to add language support for important kinds of computations, including computations 
+  for parallel, concurrent and reactive programming. This is done via a lightweight, reusable language 
+  extension that builds on core functional concepts such as pattern matching.
+\end{itemize}
+This paper simplifies the concept of joinad and requires that every joinad is also a monad (just like
+group is also a monoid), which allows us to build solid theoretical foundations. In the context of 
+Haskell, we can also combine several ideas that already disconnectedly exist. The specific new 
+contributions of this paper are:
+
+\begin{itemize}
+\item We present @docase@ notation for Haskell (Sections \ref{sec:motivation}, \ref{sec:extension}) 
+  that allows programming with monadic computations extended with an aliasing, a parallel composition
+  and a choice. We specify laws about these operations to guarantee that @docase@ keeps the familiar 
+  semantics of pattern matching using @case@ (Section \ref{sec:reasoning}).
+
+\item To demonstrate the usefulness of the extension, we consider parsing
+  (Section \ref{sec:intro-combining-parsers}), GUI programming using events
+  (Section \ref{sec:intro-choosing-events}), lightweight concurrency
+  (Section \ref{sec:intro-commit-poorman}), and a parallelism monad with
+  support for speculative parallelism (Section \ref{sec:intro-aliasing-parallel}).
+
+\item The type of the above computations is captured by a \ident{Joinad} type class (Section 
+  \ref{sec:extension-typeclass}). It relates type classes that have been already proposed for 
+  Haskell. Based on our experience, we propose and discuss several adjustments to the Haskell base 
+  library and laws required by the type classes we combine (Section \ref{sec:proposals}). 
+
+\item A joinad is an abstract computation that extends monads with three operations.
+  Deriving the laws about the three operations (Section \ref{sec:laws}) reveals that the two
+  operations form an algebraic structure known as \textit{near-semiring}.
+
+\end{itemize}
+The following section shows an example that demonstrates the usefulness of @docase@ in the context 
+of parallel programming.
+
+% ==================================================================================================
+
+\section{Motivating example}
+\label{sec:motivation}
+
+Consider the following problem: we are given a tree with values in leaves and we want to test
+whether a predicate holds for all values in the tree. This can be implemented as a recursive function:
+
+\begin{code}
+forall :: (a -> Bool) -> Tree a -> Bool
+
+forall p (Leaf v)           = p v
+forall p (Node left right)  = forall p left && forall p right
+\end{code}
+The execution of the two recursive calls could proceed in parallel. Moreover, when one of the 
+branches completes returning @False@, it is not necessary to wait for the completion of the other 
+branch as the overall result must be @False@.
+
+Running two branches in parallel can be specified easily using strategies \cite{strategies-new, strategies-old}, 
+but adding shortcircuiting behaviour is challenging. Using the @docase@ notation and a monad for 
+parallel programming, the problem can be solved as follows:
+
+\begin{code}
+forall :: (a -> Bool) -> Tree a -> Par Bool
+
+forall p (Leaf v)           = return (p v)
+forall p (Node left right)  = 
+  docase_ (forall p left, forall p right) of
+    (False, ?)    -> return False
+    (?, False)    -> return False
+    (allL, allR)  -> return (allL && allR)
+\end{code}
+The function builds a computation that explicitly specifies the evaluation order using the
+parallelism monad |Par| \cite{parmonad} extended with the support for non-deterministic choice 
+operator \cite{parmonad-cancellation}.
+
+To process sub-trees in parallel, the snippet constructs two computations (of type |Par Bool|) 
+and uses them as arguments of @docase@. Patterns in the alternatives correspond to individual
+computations. A special pattern @?@ denotes that a value of the monadic computation does not 
+have to be available for the alternative to be selected. When the processing of the left subtree 
+completes and returns @False@, the first alternative can be selected immediately, because the 
+result of the second computation is not required.
+
+If the result of the left subtree is @True@ and the right one has not completed, none of 
+the alternatives is enabled. After the right subtree is processed, one of the last two alternatives 
+can be selected. The choice operator added to the |Par| monad is non-deterministic, so the 
+programmer needs to provide alternative clauses that produce the same result in case of race.
+We return to this topic in Section~\ref{sec:intro-aliasing-parallel}, but it is, indeed, 
+the case in the above example.
+
+The selection between alternative clauses is done using the \textit{choice} operator. The result 
+of each computation is used in two independent alternatives. Evaluating the argument repeatedly 
+would defeat the purpose of @docase@, so the translation uses \textit{aliasing} operator to avoid 
+this. The last alternative combines two computations, which is achieved using \textit{parallel
+composition}.
+
+The translation of the @docase@ notation is more complex than of the @do@ notation. This is not
+a bad thing---the notation can be used to write programs that would otherwise be not
+only less syntactically elegant, but also more complex. In the above example, developers would
+more likely write the solution in a more imperative style shown in Appending~\ref{sec:appendix-shortcircuit}.
+The length of the explicit version is 21 lines compared to 6 line in the version above. 
+
+% ==================================================================================================
+
+\section{Introducing docase}
+This section introduces @docase@ notation using four examples. We first consider @docase@
+expressions with just a single alternative and then gradually add remaining features. A formal 
+definition is presented in Section~\ref{sec:extension}.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Parallel composition of parsers}
+\label{sec:intro-combining-parsers}
+Parsers are a common example of monads. A parser is a function. When supplied with an input, it 
+returns a parsed value and the unconsumed rest of the input. The following definition mostly follows
+the one by Hutton and Meijer \cite{parsingtutorial}:
+
+\begin{code}
+newtype Parser a = P (String -> [(a, Int, String)])
+\end{code}
+Compared to standard parsers, there is one notable difference. In addition to the parsed result
+and unconsumed input, the result also contains @Int@ value, which denotes the number of consumed
+characters. This will be needed later.
+A parser can be made an instance of \ident{Monad} to allow sequential composition and an instance 
+of \ident{MonadPlus} to support choice. The definitions for the above @Parser@ type are standard. 
+A more interesting question is, what does a parallel composition of parsers mean:
+
+\begin{code}
+mzip :: Parser a -> Parser b -> Parser (a, b)
+\end{code}
+The @mzip@ operation has been independently proposed as a way to generalize parallel list 
+comprehensions to work with monads \cite{bringbackmc}. We return to this topic later in Section 
+\ref{sec:proposals-monadzip}. For some monads, the operation can be implemented in terms of |>>=| 
+and @return@. An additional requirement about the implementation is that it should be symmetric, 
+so this is possible only for commutative monads such as @Reader@. For parsers, the @mzip@ operation 
+can parse the input using both parsers and then and return all combination of values such that the 
+two parsers consumed the same number of input characters. The meaning of this operation is that it 
+creates a parser for a language that is an \textit{intersection} of languages described by the 
+two parsers.
+
+This implementation of @mzip@ for parsers is shown in Figure \ref{fig:parser-monadzip}. It
+applies the two parsing functions to the same input and then returns all combinations for which
+the predicate |num1 == num2| holds. Instead of comparing the number of consumed characters, the 
+implementation could compare the tails, but that would be inefficient and it would not work for
+infinite inputs. The intersection of parsers is very useful for encoding validation of 
+inputs.
+
+\begin{figure}
+\label{fig:parser-monadzip}
+\begin{code}
+instance MonadZip Parser where 
+  mzip (P p1) (P p2) = P $ \input -> --$
+    [ ((a, b), num1, tail1) |
+         (a, num1, tail1) <- p1 input,
+         (b, num2, tail2) <- p2 input, num1 == num2 ]
+\end{code}
+\caption{Instance of \ident{MonadZip} for parsers}
+\end{figure}
+
+\paragraph{Example.}
+Cambridge phone numbers consist of 10 symbols, contain only digits and start with 
+a prefix 1223. Using standard parser combinators and the new syntax, we can write the 
+following parser:
+
+\begin{code}
+validPhone = docase_
+   sp_ many (sat isDigit), 
+       replicateM 10 item,
+       startsWith (string "1223") of
+  num, _, _ -> return num
+\end{code}
+In this snippet, the @docase@ construct is given three parsers as arguments. Patterns specify
+that all three parsers should succeed and produce a value. The @_@ pattern is different to the
+@?@ pattern from the previous example. The @?@ pattern is special and it specifies that a value
+is not required. On the other hand, @_@ is a standard Haskell pattern that requires
+a value, but ignores it afterwards. The reason why the snippet ignores the values produced by the
+last two parsers is that all parsers consume the same input and return the same value.
+The body of the alternative creates a parser that succeeds and returns the phone number as
+a string.
+
+It is possible to construct a single parser that recognizes valid Cambridge phone number without using
+the intersection. The point of the example is that the intersection (and @docase@) provide a
+very elegant way for combining several independent rules, which makes the validation code
+elegant and easy to understand.
+
+\paragraph{Desugaring.}
+The desugaring of @docase@ translates the previous snippet to the code below. In the 
+translation, the @mzip@ operation is written as |mzip_|. The reason for this will become clear
+when we discuss the algebraic theory behind joinads (Section \ref{sec:theory-algebra}).
+
+\begin{code}
+validPhone = 
+    ((many (sat isDigit) mzip_ times item 10) 
+        mzip_ startsWith (string "1223")) >>= \x ->
+            case x of ((num, _), _) -> return num
+\end{code}
+The actual translation includes several additional features that will be explained later.
+The expression shown above combines all arguments of @docase@ using the |mzip_| operation. The 
+result is a combined value of type |Parser ((String, String), String)|. The value is passed
+as an input to |>>=|. The continuation matches the tuple value against a tuple pattern composed 
+from the individual patterns of the @docase@ alternative. In this example, the pattern never fails, 
+so other cases are omitted. The body of the continuation creates a parser that succeeds and 
+returns the parsed valid phone number.
+
+Next, consider a case where @docase@ has multiple alternatives, but each contains only a single
+binding (a pattern other than @?@).
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Choosing between events}
+\label{sec:intro-choosing-events}
+
+The examples in this section are based on the imperative stream monad developed by Scholz
+\cite{imperative-streams}. Imperative streams are ``a generalization of the IO monad suitable for
+synchronous concurrent programming''. A computation |Imp a| produces zero or more
+values of type |a| and performs side-effects at certain (discrete) times. Our example uses 
+a simplified model of \textit{event streams} with type |Evt a| that do not allow side-effects.
+
+Event streams can be viewed as functions that take a time when they are started and return a list of 
+time value pairs representing the occurrences of the event. They are instances of the \ident{Monad} 
+type class. The @return@ operation creates an event stream that occurs exactly once at the time when 
+it was started. The behaviour of the |>>=| operation is as follows: When the input event occurs, the 
+event stream returned by |>>=| starts producing the occurrences of the event stream generated by the 
+continuation until the next occurrence of the input event.
+
+In addition to the operations of \ident{Monad}, event streams can also implement a monadic or--else
+operation representing a choice:
+
+\begin{code}
+morelse :: Evt a -> Evt a -> Evt a
+\end{code}
+The resulting event stream occurs whenever any of the two arguments occur. When both of the 
+arguments occur at the same time, then the returned value is the value produced by the first (left)
+argument. As explained later (Section \ref{sec:reasoning}), this left bias of the operation is 
+required by a law about @morelse@.
+
+\paragraph{Example.} Assume that the user can create objects by clicking on some window. A click 
+creates a different object when the \ident{Shift} key is pressed. The user interface provides event 
+streams @shiftDown@ and @shiftUp@ that occur when \ident{Shift} is pressed and released; an event 
+stream @load@ occurs once when the application starts and @mouseClick@ occurs when the button is pressed.
+
+The following snippet creates an event stream of type |Evt Bool| that occurs each time a mouse 
+button is clicked. The value carried by the event is a flag denoting whether \ident{Shift} was
+pressed:
+
+\begin{code}
+shiftClicks = docase_ load, shiftUp, shiftDown of
+  a, ?, ?  -> fmap (const False) mouseClick
+  ?, u, ?  -> fmap (const False) mouseClick
+  ?, ?, d  -> fmap (const True) mouseClick
+\end{code}
+The @docase@ construct takes three event streams. When one of them produces a value,
+the construct selects one of the alternatives and @shiftClicks@ starts producing values generated
+by the alternative (@True@ or @False@ whenever mouse is clicked). Each of the alternatives matches
+on just a single event stream (using a variable pattern) and ignores the values of other event 
+streams using @?@. The variables bound by the patterns are not used, so we could use @_@ pattern, 
+but naming the variables makes the example easier to follow.
+
+\paragraph{Desugaring.}
+The example is translated to the code below. Because each alternative binds only
+on a single argument, the translation doesn't need the @mzip@ operation. Similarly, to the 
+previous desugared example, the @morelse@ operation is abbreviated as |morelse_|.
+
+\begin{code}
+shiftClicks = 
+  (load >>= \a -> fmap (const False) mouseClick)  morelse_
+  (shiftUp >>= \u -> fmap (const False) mouseClick) morelse_
+  (shiftDown >>= \d -> fmap (const True) mouseClick)
+\end{code}
+The translator processes alternatives independently and then merges them using |morelse_|. The 
+event stream that the alternative binds on is passed as the first argument to |>>=|. The function 
+used as the second argument contains the body of the alternative. 
+The example is simplified, because patterns in the alternatives do not fail. If the pattern matching
+failed, the event stream should continue behaving according to the last selected alternative. To
+encode this behaviour, the translation needs one more extension (Section \ref{sec:intro-commit-poorman}).
+
+\begin{figure}
+\label{fig:imperativestream-semantics}
+\begin{code}
+^sm(unit v)^sub(s)       = \t -> if s == t then Just v else Nothing
+
+^sm(a mzip_ b)^sub(s)     = \t -> case (^sm(a)^sub(s) t, ^sm(b)^sub(s) t) of
+  sp_ sp_  (Just v^sub(1), Just v^sub(2)) -> Just(v^sub(1), v^sub(2)); sp_ _ -> Nothing
+
+^sm(a morelse_ b)^sub(s)  = \t -> case (^sm(a)^sub(s) t, ^sm(b)^sub(s) t) of
+           (Just v^sub(1), _) -> Just v^sub(1); sp_ (_, o^sub(2)) -> o^sub(2)
+
+^sm(a >>= f)^sub(s)      = \t -> case (last t smp_ ^sm(a)^sub(s)) of
+           (Just(t^sub(1), v^sub(1))) -> ^sm(f v^sub(1))^sub(t^sub(1)) t; sp_ _ -> Nothing
+  where  last 0 _   = Nothing
+         last t sf  = case sf t of  Just v -> Just (t, v)
+                                    _ -> last (t - 1) sf
+\end{code}
+\caption{Semantics of imperative streams}
+\end{figure}
+
+\paragraph{Semantics.} Showing a complete implementation of event streams is beyond the scope of
+this article. We present a semantics that defines the implementation and can be used to verify 
+that the operations obey joinad laws. The semantics follows the original definition of imperative 
+streams \cite{imperative-streams}. Instead of using lists, we model event occurrences using a 
+partial function:
+
+\begin{code}
+^sm(-) :: Evt a -> T -> T -> Maybe a
+\end{code}
+The time $T$ is a discrete value. When applied to a starting time $t \in T$, the semantic function 
+gives a partial function that returns |Just v| if the event occurs at the specified time.
+The semantics of \ident{Monad} operations, |morelse_| and also |mzip_| is given in 
+Figure \ref{fig:imperativestream-semantics}.
+
+The event stream created by @unit@ produces a value at the time when it is started.
+The semantics of |mzip_| and |morelse_| follow a similar pattern. At given time, they combine 
+both, or take the leftmost value if the required values are available. Finally, |>>=| behaves as 
+an event stream generated by the last occurrence of the input event.
+
+Using this semantic model, we could derive an implementation using the techniques developed recently 
+for functional reactive programming (FRP) by Elliott \cite{push-pull-frp}. Compared to other 
+approaches, imperative streams give a simple model based just on discrete events. The other aspect 
+of FRP---working with continuous values---could be added similarly, but it would not notably benefit 
+from the @docase@ notation, because its \textit{parallel composition} and \textit{choice} operations
+are trivial.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Aliasing parallel computations}
+\label{sec:intro-aliasing-parallel}
+
+In the previous two examples, each argument of @docase@ was bound only in one alternative.
+This is not a requirement. Indeed, the @forall@ function from the introduction started two 
+computations and matched their values against two alternatives (one that implemented shortcircuiting
+and the other handled the general case). For monads representing computations, this requires a special handling.
+
+The problem can be demonstrated using a parallelism monad. A value of type
+|Par a| represents a computation that can be evaluated (using some parallel evaluator) to get a 
+value of type |a|. Parallel computations are instances of \ident{Monad}. The @return@
+operation creates a computation that immediately evaluates to a specified value and |>>=| 
+evaluates the argument and then evaluates the result produced by a continuation.
+The |Par a| type also supports operations from the previous two sections. The @mzip@ operation 
+starts two computations in parallel and produces a value when they both complete; @morelse@
+represents a non-deterministic choice and completes when the first of the two computations 
+produce a value.
+
+\begin{figure}
+\begin{code}
+^sm(unit v)    = \t -> (t, v)
+
+^sm(mzero)      = \t -> (inf_, bot_)
+
+^sm(a mzip_ b)  = \t -> (max t^sub(1) t^sub(2), (v^sub(1), v^sub(2)))
+	where  (t^sub(1), v^sub(1)) = ^sm(a)^sub(t) and_ (t^sub(2), v^sub(2)) = ^sm(b)^sub(t)
+
+^sm(a morelse_ b)  = \t -> (min t^sub(1) t^sub(2), v)
+	where  (t^sub(1), v^sub(1)), (t^sub(2), v^sub(2)) = ^sm(a)^sub(t), ^sm(b)^sub(t)
+	       v | t^sub(1) <= t^sub(2) = v^sub(1) | otherwise = v^sub(2)
+
+^sm(a >>= f)  = \t -> ^sm(b)^sub(s)
+	where  (s, v) = ^sm(a)^sub(t) and_ b = f v
+
+^sm(mduplicate a)  = \t -> (\t^sub(2) -> (max t^sub(1) t^sub(2), v))
+	where (t^sub(1), v) = ^sm(a)^sub(t)
+\end{code}
+\label{fig:future-semantics}
+\caption{Semantics of futures}
+\end{figure}
+
+\paragraph{Example.} Assume that we have some calculation that uses a main function and two alternative
+heuristic functions. In order to continue, we need the result of the main function and one heuristic.
+Using @docase@, this can be written as follows:
+
+\begin{code}
+calcAlt inp = docase_ calc inp, alt1 inp, alt2 inp of
+  a, ?, b -> return (a, b)
+  a, b, ? -> return (a, b)
+\end{code}
+Note that the first argument is bound to a variable @a@ in both of the alternatives. The desired 
+operational meaning is that the expression starts all three computations in parallel and then waits 
+until computations required by some alternative complete. Using the logic described so far, the 
+snippet could be translated as follows:
+
+\begin{code}
+calcAlt inp = 
+  (calc inp) mzip_ (alt1 inp) >>= \ (a, b) -> return (a, b) morelse_
+  (calc inp) mzip_ (alt2 inp) >>= \ (a, b) -> return (a, b)
+\end{code}
+This doesn't give the required behaviour. The code creates a computation that 
+starts four tasks -- the two alternative heuristics and \textit{two times} the main
+computation. Eliminating a common subexpression |calc inp| does not solve the problem. The value 
+|Par a| obtained from |calc inp| represents a recipe for creating a computation, as opposed to 
+a task with a mutable variable that is eventually set. When used repeatedly, it repeatedly 
+starts a new computation.
+
+\paragraph{Desugaring.} To get the desired semantics, we need another operation. The operation
+represents aliasing of monadic computations. It can be best explained by looking at the type 
+signature together with the implementation for the |Par a| monad:
+
+\begin{code}
+mduplicate :: Par a -> Par (Par a)
+mduplicate m = do 
+  v <- spawn m
+  return (get v)
+\end{code}
+The operation builds and returns (inside the monad) a new monadic value that represents 
+an aliased reference to the computation. The implementation starts a given computation 
+using the @spawn@ function. The function returns a mutable variable that will contain the result 
+of the computation when it completes. The |Par a| value is created using the @get@ function,
+which builds a computation that blocks until the variable is set.
+
+Equipped with this operation, the desugaring can create an aliased monadic computation for each
+of the @docase@ arguments and then combine the aliased computations:
+
+\begin{code}
+calcAlt inp = 
+  mduplicate (calc inp) >>= \c0 ->
+  mduplicate (alt1 inp) >>= \c1 ->
+  mduplicate (alt2 inp) >>= \c2 ->
+  c0 mzip_ c1 >>= \ (a, b) -> return (a, b) morelse_
+  c0 mzip_ c2 >>= \ (a, b) -> return (a, b)
+\end{code}
+This version gives the desired operational behaviour. The three computations are started in 
+the implementation of @mduplicate@. The body then composes computations that represent
+just aliases (by waiting on a variable).
+
+\paragraph{Semantics.} To describe the example more formally, we present a simple semantics
+of the parallelism monad. It can be used to verify that the laws required about joinad operations 
+(Section \ref{sec:laws}) hold for the |Par a| type. A computation is modelled as a function that
+takes a time when the computation is started and returns a time when it completes together with
+the result:
+
+\begin{code}
+^sm(-) :: Par a -> T -> (T, a)
+\end{code}
+A semantics expressed in terms of this function is shown in Figure~\ref{fig:future-semantics}.
+Operations of \ident{Monad} as well as |mzip_| and |morelse_| behave as already informally described.
+The @mduplicate@ operation applies the semantic function to a given computation with the starting 
+time of @mduplicate@ as an argument. The produced computation finishes then completes either at 
+the completion time or at the time when it is created, whichever happens later.
+
+The semantics doesn't capture the fact that evaluating computation multiple times requires 
+additional CPU resources. Therefore, it doesn't demonstrate the importance of @mduplicate@ for
+the parallelism monad, but it is useful for considering joinad laws. The next section
+informally describes a variation that enables effects in concurrent computations, which makes
+the importance of @mduplicate@ more obvious. It prevents the duplication of effects. 
+
+\paragraph{Nondeterminism.} The semantics presented above is deterministic, but in reality, this 
+is not the case. We could add small $\delta$ to all operations involving time. The interesting 
+case is the |morelse_| operation, where the value (second element of the tuple) depends on the time.
+This means that the operation introduces non-determinism.
+
+To keep programs simple and deterministic, we follow the approach used by Elliott \cite{push-pull-frp} 
+for the unambiguous choice (@unamb@) operator. The @morelse@ operation can be used only when the 
+two arguments are \textit{compatible}:
+
+\begin{code}
+compatible a b = forall_ t {-". \ "-} (t^sub(1) == inf_) || (t^sub(2) == inf_) || (v^sub(1) == v^sub(2))
+	where  (t^sub(1), v^sub(1)) = ^sm(a)^sub(t) and_ (t^sub(2), v^sub(2)) = ^sm(b)^sub(t)
+\end{code}
+When started at the same arbitrary time, the two operations have to produce the same value when they
+both complete. An operation that never completes can be created using the @mzero@ operation, which 
+is explained in the next section. The condition could be reformulated for alternatives of the @docase@
+expression formally, but it is not difficult to see that the condition holds for the motivating 
+example from Section \ref{sec:motivation}.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Committing to a concurrent alternative}
+\label{sec:intro-commit-poorman}
+
+The last simplification that we made in the previous example was that the patterns of @docase@
+alternatives never failed. We demonstrate this aspect using a monad based on Poor Man's Concurrency 
+Monad developed by Claessen \cite{poorman}. A value of type |Concur m a| represents a computation 
+that will eventually produce a value of type |a| and may produce effects in a monad |m| along the way. 
+
+The monad is similar to parallel computations from the previous section. For example, assume
+that the underlying monad is a writer monad using monoid |M| to keep the state. The semantics from 
+the previous section could be extended by adding state to the result:
+
+\begin{code}
+^sm(-) :: Concur m a -> T -> (T, a, M)
+\end{code}
+The semantics from Figure \ref{fig:future-semantics} can be extended in a straightforward way to use
+this function. Unlike |Par a|, the implementation of |Concur m a| does not actually run computations in 
+parallel. It emulates concurrency by interleaving of steps. This means that the |Concur m a| monad is 
+deterministic and the time |T| represents the number of primitive steps. In order to support patterns 
+that may fail, the type also provides an operation @mzero@ representing a failure:
+
+\begin{code}
+mzero :: Concur m a
+\end{code}
+The operation is defined for standard monads that implement the \ident{MonadPlus} type class. For the
+Poor Man's Concurrency monad, the operation creates a computation that never produces a value.
+
+\paragraph{Example} Consider a function that concurrently downloads data from two servers. When some
+data is not available, the function returns @Nothing@. When both servers produce a value, the function
+returns @Just@ containing a tuple, but only when the values are compatible. When data is incompatible,
+the function should fail.
+
+\begin{code}
+downloadBoth :: Concur IO Bool
+downloadBoth = docase_ dl1, dl2 of
+  Just a, Just b -> do
+    lift (print ``Got both values'')
+    if compatible a b then return True else mzero
+  _, _ -> do
+    lift (print ``Some value missing'')
+    return False
+\end{code}
+The first alternative of @docase@ binds on both computations and matches when both produce @Just@ value.
+The body prints a message (the @lift@ function lifts a value |IO a| into |Concur IO a|) and then 
+returns @True@ or fails by returning @mzero@. The second alternative handles any values and returns 
+@False@ after printing a message.
+
+A simple way to desugar failing patterns (suggested by Tullsen \cite{firstlcasspats}) is to return 
+@mzero@ when pattern matching fails. When it succeeds, the original body is returned. For simplicity,
+we omit the aliasing using @mduplicate@:
+
+\begin{code}
+(dl1 mzip_ dl2 >>= \t -> case t of 
+    (Just a, Just b) -> do smp_ ...
+    _ -> mzero) morelse_
+(dl1 mzip_ dl2 >>= \t -> do smp_ ...)
+\end{code}
+An intuitive expectation about pattern matching that we want to keep for joinads is that 
+|->| behaves as a \textit{commit point}. Once arguments match patterns of some alternative, the 
+code will execute this alternative and not any other. However, this is not the case with the
+desugaring above. When the function downloads two incompatible values, it prints ``Got both values''.
+Then it fails and starts executing the second clause, printing ``Some values missing''.
+
+\paragraph{Desugaring} To get the desired behaviour, the desugaring needs to add an additional
+level of wrapping. Instead of just returning the body, we wrap the body using @return@:
+
+\begin{code}
+(dl1 mzip_ dl2 >>= \t -> case t of 
+    (Just a, Just b) -> return (do smp_ ...)
+    _ -> mzero) morelse_
+(dl1 mzip_ dl2 >>= \t -> 
+    return(do smp_ ...)) >>= id
+\end{code}
+The cases where the pattern matching succeeded now contain just a call to @return@ with the body
+of the alternative as an argument and the cases where the pattern matching fails contain @mzero@.
+This means that the type of values aggregated using |morelse_| is |m (m a)|. Additionally,
+all of them are either of the form |m >>= return . f| or |m >>= mzero|.
+The result of |morelse_| has the same type as its arguments, so the overall result also has a type
+|m (m a)|. It represents a monadic value that wraps (or produces) body (or bodies) that have
+been selected. To create a computation that actually runs the body, the desugaring inserts 
+|>>= id| at the end of the translated expression. 
+
+% ==================================================================================================
+
+\section{Language extension}
+\label{sec:extension}
+
+This section presents the @docase@ extension formally. It introduces the syntax and type classes
+that a type must implement to support the syntax. Then we look at typing rules and present a 
+translation in terms of operations provided by the \ident{Joinad} type class.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Syntactic extension}
+\label{sec:extension-syntax}
+
+The extension adds an additional case to Haskell expression $e$. It also 
+defines two additional syntactic categories to extend the language of patterns (symbol $w$) that 
+can be used in alternatives (symbol $a$) of the @docase@ construct:
+
+\begin{code}
+p  =  x | (p^sub(1), ..., p^sub(n)) | ...          {-"\text{Ordinary patterns}"-}
+
+w  =  ?                                            {-"\text{Monadic ignore pattern}"-}
+   |  p                                            {-"\text{Monadic binding pattern}"-}
+
+a  =  w^sub(1), ..., w^sub(n) -> e                 {-"\text{Docase alternative (clause)}"-}
+
+e  =  docase_ e^sub(1), ..., e^sub(n) of  sp_ sp_  {-"\text{Docase expression with}"-}
+        a^sub(1); ...; a^sub(k)                    {-"\text{$k \geq 1$ alternatives}"-}
+\end{code}
+The alternatives of @docase@ are similar to the alternatives of @case@. In addition to ordinary 
+Haskell patterns, alternatives can match monadic computations against the special 
+\textit{ignore pattern} written as @?@. The syntax allows this by duplicating the syntactic
+category of alternatives and defining a new category for @docase@ patterns.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Joinad type class}
+\label{sec:extension-typeclass}
+
+The @docase@ syntax operates on values of some type |m a| that is an instance of a \ident{Joinad} 
+type class. The type class provides operations required by the @docase@ translation. The Figure 
+\ref{fig:joinad-classes} shows the definition of \ident{Joinad}. The definition just combines several 
+classes that already exist in various Haskell extensions and packages. 
+
+\begin{itemize}
+\item \ident{MonadZero} and \ident{MonadOr} are defined in a \ident{MonadPlus} reform proposal
+\cite{monadplusreform}. The aim of the proposal is to distinguish between cases when the (monoidal)
+operation is unbiased (\ident{MonadPlus}) and when it has a left bias (\ident{MonadOr}). For joinads,
+we require left bias, but we express the law slightly differently (Section \ref{sec:laws-monador}).
+
+\item \ident{MonadZip} is defined by a GHC extension that adds \textit{monad comprehensions}
+\cite{bringbackmc, comprefun}. The extension adds new expressive power that is not available with 
+the @do@ notation \cite{parcomprefun}. The @docase@ syntax uses the type class in a similar way as
+\textit{parallel monad comprehension} and provides similar expressivity using a syntax similar to 
+the @do@ notation.
+
+\item \ident{MonadDuplicate} is similar to the \ident{Extend} type class from the comonad 
+package \cite{comonadpkg}. The only difference is that we require the type to also be a monad,
+which allows us to define a default implementation of the @mduplicate@ operation. 
+
+\end{itemize}
+The laws that are required for the operations are discussed in more details later in Section
+\ref{sec:reasoning} and the category theoretical background of the definitions is discussed in
+Section \ref{sec:theory}. Before looking at the theory, the next two section complete the 
+specification of the language extension.
+
+\begin{figure}
+\begin{code}
+class Monad m => MonadZero m where
+   mzero :: m a
+
+class MonadZero m => MonadOr m where
+   morelse :: m a -> m a -> m a
+
+class Monad => MonadZip m where
+  mzip :: m a -> m b -> m (a, b)
+
+class Monad m => MonadDuplicate m where
+  mduplicate :: m a -> m (m a)
+  mduplicate m = return m
+
+class (MonadDuplicate m, MonadZip m, MonadOr m) 
+  => Joinad m
+\end{code}
+\caption{ The definition of \ident{Joinad} type class. }
+\label{fig:joinad-classes}
+\end{figure}
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Typing rules}
+\label{sec:extension-typing}
+
+Similarly to other syntactic sugar in Haskell \cite{groupordercompre}, the @docase@ expression 
+is type-checked before the translation. The typing rules are shown in Figure \ref{fig:typing-rules} 
+and are defined in terms of three judgements.
+
+The judgement $\vdash w : \tau \Rightarrow \Delta$ for patterns is similar to the one used by
+Wadler and Peyton Jones \cite{groupordercompre}. It specifies that a pattern $w$ of type $\tau$ binds 
+variables of the environment $\Delta$. An ignore pattern does not bind any variables (\textsc{Ign}); 
+a variable pattern binds a single variable (\textsc{Var}) and a tuple pattern binds the union of 
+variables bound by sub-patterns (\textsc{Tup}).
+
+The judgement $\Gamma, \alpha, \bar{\tau} \vdash a \leadsto \sigma $ is more interesting. It 
+checks the type of an individual alternative of the @docase@ construct. The judgement is provided 
+with an environment $\Delta$, a type $\alpha$ which is a \ident{Joinad} and a list of types of 
+@docase@ arguments. It type-checks the alternative and yields a type of values produced by the
+body of the alternative (\textsc{Alt}). Two aspects of the rule do not directly follow 
+from the syntax. Firstly, the body $e$ of the alternative must have the same monadic type 
+$\alpha$ (of kind |* -> *|) as the @docase@ arguments. Secondly, at least one of the patterns $w$
+of every alternative $a$ must be a \textit{binding pattern}. The reasons for these two constraints 
+will become obvious when we discuss the translation.
+
+Finally, $\Gamma \vdash a : \tau$ extends the standard type-checking procedure
+for Haskell expressions with a rule for @docase@ (\textsc{Jon}). When the type of arguments is 
+a \ident{Joinad} type $\alpha$ (of kind |* -> *|) applied to some type argument and all 
+alternatives yield the same return type $\sigma$, then the overall type of the expression is 
+$\alpha \ \sigma$.
+
+
+\begin{figure}
+\begin{equation*}
+\fbox{$\vdash w : \tau \Rightarrow \Delta$}
+\end{equation*}
+
+\begin{equation*}
+\inferrule
+  { }
+  {\vdash \text{?} : \tau \Rightarrow \{ \}}
+\quad(\textsc{Ign}) \ \ \ \ \ \ \ \
+\inferrule
+  { }
+  {\vdash x : \tau \Rightarrow \{ x : \tau\}}
+\quad(\textsc{Var})
+\end{equation*}
+
+\begin{equation*}
+\inferrule
+  {\vdash w_i : \tau_i \Rightarrow \Delta_i}
+  {\vdash (w_1, \ldots, w_n) : (\tau_1, \ldots, \tau_n) \Rightarrow \Delta_1 \cup \ldots \cup \Delta_n}
+\quad(\textsc{Tup})
+\end{equation*}
+
+\begin{equation*}
+\fbox{$\Gamma, \alpha, \bar{\tau} \vdash a \leadsto \sigma $}
+\end{equation*}
+
+\begin{equation*}
+\inferrule
+  {\vdash w_i : \tau_i \Rightarrow \Delta_i \\ \exists i : w_i \neq \text{?} 
+     \\\\ \Delta_1 \cup \ldots \cup \Delta_n \vdash e : \alpha \ \sigma  }
+  {\Gamma, \alpha, \bar{\tau} \vdash (w_1, \ldots, w_n) \rightarrow e \leadsto \sigma }
+\quad(\textsc{Alt})
+\end{equation*}
+
+\begin{equation*}
+\fbox{$\Gamma \vdash a : \tau$}
+\end{equation*}
+
+\begin{equation*}
+\inferrule
+  {\langle\textbf{Joinad} \ \alpha \rangle \\ \Gamma \vdash e_i :\alpha \ \tau_i 
+    \\ \Gamma, \alpha, \bar{\tau} \vdash a_i \leadsto \sigma }
+  {\Gamma \vdash \textbf{docase} \ \bar{e} \ \textbf{of} \ a_1; \ldots; a_n : \alpha \ \sigma}
+\quad(\textsc{Jon})
+\end{equation*}
+\caption{ Semantics-preserving transformations for docase. }
+\label{fig:typing-rules}
+\end{figure}
+
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Translation}
+\label{sec:extension-translation}
+
+After type-checking, the @docase@ notation is translated to applications of functions provided by the 
+\ident{Joinad} type class. As demonstrated by the previous examples, the desugaring is slightly more 
+complicated than the @do@ notation. We define it using two functions:
+
+\begin{code}
+d^tsm(-)  :: e -> e
+c^tsm(-)  :: a -> [id] -> e
+\end{code}
+The first function takes an expression. If the argument is the @docase@ expression, the function
+produces an expression that does not contain @docase@ at the top-level. The second function is used
+for translating alternatives of @docase@. It takes a list of identifiers that refer to the arguments
+of the @docase@ expression. The translation is defined by the following two rules:
+
+\begin{code}
+d^tsm(docase_ e^sub(1), ..., e^sub(n) of a^sub(1); ...; a^sub(k)) =
+  mduplicate e^sub(1) >>= \v^sub(1) -> sp_ ... sp_ mduplicate e^sub(n) >>= \v^sub(n) ->
+  (c^tsm(a^sub(1)) [v^sub(1), ..., v^sub(n)] morelse_ ... morelse_ c^tsm(a^sub(n)) [v^sub(1), ..., v^sub(n)]) >>= id
+
+lsp_
+
+c^tsm(w^sub(1), ..., w^sub(n) -> e) [v^sub(1), ..., v^sub(n)] = 
+  v^sub(1) mzip_ ... mzip_ v^sub(m) >>= \x -> case x of 
+    (p^sub(1), ..., p^sub(m))  -> return e
+    otherwise                  -> mzero
+
+  where  [ (p^sub(1), v^sub(1)), ..., (p^sub(m), v^sub(m)) ] = 
+           [ (w^sub(i), v^sub(i)) | i <- 1 ... n, w^sub(i) neq_ ?]
+\end{code}
+The expressions given as arguments to @docase@ are first passed to the @mduplicate@ function, which
+constructs a value of type |m (m a)|. When passed to |>>=|, the continuation is called with a value
+|v^sub(i)| that represent an aliased computations. The variables are passed to |c^tsm(-)| when 
+translating alternatives. Alternatives are translated to values of type |m (m a)| that represent 
+monadic values carrying bodies to be executed. The monadic values are then combined using the |morelse_| 
+operations. The result of this combination is still a value of type |m (m a)|, so the last binding 
+passes it to the identity function to execute the body of the selected alternative.
+
+To translate an alternative, we identify which of the arguments are matched against
+a binding pattern. These computations are combined using the |mzip_| operation. The resulting 
+computation carries tuples such as |(a, (b, c))|. As discussed later, the |mzip_| operation is 
+associative, so the order does not matter. Values carried by the combined monadic computation 
+are matched against a pattern re-constructed from \textit{binding patterns} of the alternative. 
+When a value matches, the body is wrapped and returned using @return@. If the value does not match, 
+the alternative reports a failure using @mzero@.
+
+% ==================================================================================================
+
+\section{Reasoning about joinads}
+\label{sec:reasoning}
+
+The @docase@ syntax intentionally resembles the @case@ construct. To turn this syntactic similarity 
+into a useful intuition for developers, we would also like to guarantee that the semantics of 
+@docase@ resembles the semantics of @case@. 
+
+This intuition can be formalized by specifying that code transformations in Figure~\ref{fig:transformations} 
+preserve the semantics. The syntactic transformations motivate laws about primitive joinad operations 
+that are discussed in the next section. When the primitive operations obey certain laws, the syntactic
+transformations are correct. We proved that this is the case using the Coq theorem prover. 
+\footnote{The script is available at http://www.cl.cam.ac.uk/\textasciitilde tp322/TBD}
+
+\begin{figure}
+\begin{code}
+lsp_
+{-"\text{(1) Binding equivalence}"-}
+  docase_ m of v -> e sp_ == sp_ do v <- m; e
+
+lsp_
+{-"\text{(2) Argument ordering}"-}
+  docase_ m^sub(1), ..., m^sub(n) of
+    w^sub(1,pi_ 1) ... w^sub(1,pi_ n) -> e^sub(1); ...
+    w^sub(k,pi_ 1) ... w^sub(k,pi_ n) -> e^sub(k)
+  {-"\text{(are equivalent for any permutation $\pi$ of $n$ numbers)}"-}
+
+lsp_
+{-"\text{(3) Clause ordering}"-}
+    docase_ m of v -> e^sub(1); sp_ v -> e^sub(1)
+==  docase_ m of v -> e^sub(1)
+
+lsp_
+{-"\text{(4) Alternative noninterference}"-}
+    docase_ m of v       -> e^sub(1); sp_ pfail_  -> e^sub(2)
+==  docase_ m of pfail_  -> e^sub(2); sp_ v       -> e^sub(1)
+==  docase_ m of v       -> e^sub(1)
+
+lsp_
+{-"\text{(5) Argument noninterference}"-}
+    docase_ m, mzero of v, ?                -> e^sub(1);      v^sub(1), v^sub(2)  -> e^sub(2)
+==  docase_ mzero, m of v^sub(1), v^sub(2)  -> e^sub(2); sp_  ?, v                -> e^sub(1)
+==  docase_ m of v -> e^sub(1)
+
+lsp_
+{-"\text{(6) Matching units}"-}
+    docase_  return e^sub(1), return e^sub(2) of v^sub(1), v^sub(2) -> e
+==  case (e^sub(1), e^sub(2)) of (v^sub(1), v^sub(2)) -> e
+
+lsp_
+{-"\text{(7) Matching images}"-}
+    docase_ map f e^sub(1), map g e^sub(2) of v^sub(1), v^sub(2) -> e
+==  docase_ e^sub(1), e^sub(2) of u^sub(1), u^sub(2) -> e[v^sub(1) <- f u^sub(1), v^sub(2) <- g u^sub(2)]
+
+lsp_
+{-"\text{(8) Matching duplicate}"-}
+    docase_ a, a of u, v -> e
+==  docase_ a of u -> e[v <- u]
+
+lsp_
+{-"\text{(9) Flattening}"-}
+    docase_ m, n^sub(1), n^sub(2) of 
+      v, v^sub(1), ? -> e^sub(1); sp_ v, ?, v^sub(2) -> e^sub(2)
+==  docase_ m, (docase_ n^sub(1), n^sub(2) of
+      v^sub(1), ? -> return sp_ \v -> e^sub(1); 
+      ? , v^sub(2) -> return sp_ \v -> e^sub(2)) of v, f -> f a
+\end{code}
+
+\caption{ Semantics-preserving transformations for docase. }
+\label{fig:transformations}
+\end{figure}
+
+\begin{itemize}
+\item \textit{Binding equivalence} describes a degenerate case in which pattern matching uses
+  a single alternative that always succeeds. Additional complexities of the @docase@ translation
+  should not affect the meaning of monadic binding.
+  
+\item \textit{Argument ordering} specifies that the order in which arguments and patterns are
+  specified does not affect the meaning. This equation implies laws the allow reordering of 
+  arguments of the @mzip@ operation.
+
+\item Unlike the order of arguments, the order of clauses is important. As specified by 
+  \textit{clause ordering}, when there are overlapping alternatives, the first one should be 
+  selected.
+
+\item The transformations \textit{alternative noninterference} and \textit{argument noninterference}
+  specify that including additional failing clause or argument doesn't affect the meaning. (In 
+  equation (3), the symbol $\bullet$ stands for a pattern that never succeeds.) The equations are
+  manifested as laws that identify @mzero@ as \textit{zero} and \textit{unit} of |mzip_| and
+  |morelse_|, respectively.
+
+\item The next three transformations describe the case when arguments are created in some special way.
+  In \textit{matching units} and \textit{matching images}, the arguments are created by monadic
+  @return@ and @map@ (the latter one is defined in terms of |>>=| and @return@ and is also known
+  as @liftM@). The arguments of \textit{matching duplicate} are two copies of the same monadic
+  value.
+
+\item The \textit{flattening} transformation specifies that @docase@ nested in an argument of 
+  another @docase@ can be flattened. This is a trivial fact about non-monadic @case@, but it 
+  implies an interesting relation between the operations of a joinad.
+\end{itemize}
+
+The following section discusses individual joinad operations and the laws that they must obey
+in order to allow the transformations above.
+
+% ==================================================================================================
+
+\section{Joinad laws}
+\label{sec:laws}
+
+Before looking at the laws of joinad operations, we briefly review the well-known laws that are 
+required for any monad and therefore also for any joinad:
+\begin{align*}
+\text{unit} \: a \bind f &\equiv f \: a \tag{left identity} \\
+m \bind \Varid{unit} &\equiv m \tag{right identity} \\
+(m \bind f) \bind g &\equiv m \bind \lambda x \rightarrow f \: x \bind g \tag{associativity}
+\end{align*}
+Joinad also requires the @mzero@ operation from \ident{MonadZero}. The value should behave as a 
+zero element with respect to binding:
+\begin{align*}
+\mzero \bind f &\equiv \mzero \tag {left zero} \\
+m \bind \lambda \rightarrow \mzero &\equiv \mzero \tag{right zero}
+\end{align*}
+The \textit{left zero} law is generally accepted. The \textit{right zero} law is sometimes omitted, 
+because it may not hold when $m$ is $\bot$, but the official documentation for \ident{MonadPlus}
+\cite{monadplusdoc} includes it. All of these five laws are necessary to prove that the 
+transformations in Section \ref{sec:reasoning} preserve meaning. In particular, the \textit{right 
+zero} law is needed to perform the \textit{alternative noninteference} (4) transformation.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{MonadZip type class}
+\label{sec:laws-monadzip}
+
+To our understanding, the laws about \ident{MonadZip} in the monad comprehensions extension
+\cite{bringbackmc} is still subject to discussion. This section discusses laws that are required
+about |mzip_| by joinads. The laws presented here are also a reasonable requirement for monad 
+comprehensions. We give more details in \ref{sec:proposals}, but many of the syntactic 
+transformations from section \ref{sec:reasoning} can be rewritten using the extended 
+\textit{monad comprehension} syntax. 
+
+The first two laws allow arbitrary rearrangement of arguments aggregated using the |mzip_| operation.
+This is required by \textit{argument ordering} (2). The laws are expressed using two helper functions:
+\begin{align*}
+  a \mzip (b \mzip c) &\equiv \map \: \text{assoc} \: ((a \mzip b) \mzip c) \tag{associativity} \\
+  a \mzip b &\equiv \map \: \text{swap} \: (a \mzip b) \tag{symmetry} \\
+\\[-10pt]
+  \textbf{where} & \: \text{assoc}((a,b), c) = (a,(b,c))\\
+                 & \: \text{swap}(a,b) = (b,a)
+\end{align*}
+As discussed in Section \ref{sec:theory-monoidal}, these two laws are founded in mathematical theory 
+behind joinads. The |mzip_| operation is component of a \textit{symmetric monoidal functor} that requires 
+both of the above laws. Another law that is also required by this formalism is \textit{naturality}, which 
+is one of three laws that specify how |mzip_| behaves with respect to other operations:
+
+\begin{align*}
+  \map \: f \: a \mzip \map \: g \: b &\equiv \map \: (f \times g) \: (a \mzip b) \tag{naturality} \\
+  \text{return} \: a \mzip \text{return} \: b &\equiv \text{return} \: (a, b) \tag{product} \\
+  a \mzip a &\equiv \map \: \text{dup} \: a \tag{duplication} \\
+\\[-10pt]
+  \textbf{where} & \: \text{dup} \: a = (a, a)
+\end{align*}
+In general, all of these three laws specify what happens when applying $\mzip$ to monadic values 
+that are created in some special way. The laws follow from the three \textit{matching} 
+transformations (6, 7, 8).
+\begin{itemize}
+\item In \textit{naturality}, the arguments are created using @map@. The application of $\mzip$ is
+  lifted to be performed before the mapping. The mapping then transform both elements of the 
+  combined tuple.
+  
+\item In \textit{product}, the arguments are created using @return@. The combination of values is
+  lifted to be performed before the use of @return@ and becomes a tuple constructor.
+
+\item In \textit{duplication}, the arguments are two copies of the same monadic value. The 
+  duplication can be lifted inside the monad and performed on the actual values using @map@.
+
+\end{itemize}
+The next law specifies that @mzero@ is the \textit{zero element} with respect to $\mzip$
+(thanks to the symmetry of |mzip_|, it is both left and right zero):
+\begin{align*}
+  a \mzip \mzero \equiv \mzero \equiv \mzero \mzip a \tag {zero} 
+\end{align*}
+This law is intuitively necessary. An @mzero@ value of type |m a| does not contain any value of type
+|a|. Given a value of type |b| there is no way to construct a value of type |(a, b)|.
+
+\paragraph{Applicative functors.} Given a monad, it is possible to define an instance of applicative
+functor (\ident{Applicative} type class). An equivalent definition of this type class described
+by McBride and Paterson \cite{applicative} defines an operation $\star$ that has exactly 
+the same type as $\mzip$. However, the laws we require are different, because \ident{Applicative}
+does not require \textit{symmetry}. 
+
+This means that the $\mzip$ operation is an independent addition. As discussed in our earlier
+paper \cite{joinads}, for commutative monads, the $\mzip$ operation can be defined using |>>=|
+and @return@, but this is not possible in general. For some types, the $\mzip$ operation is a 
+part of a distinct \ident{Applicative} instance. For example, $\star$ for a standard \ident{List}
+monad is a Cartesian product. As the name suggests, $\mzip$ for lists is just @zip@, which is 
+a $\star$ operation of the \ident{ZipList} applicative functor.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{MonadOr type class}
+\label{sec:laws-monador}
+
+The \ident{MonadOr} type class defines the @morelse@ operation (also written as $\morelse$). As
+already mentioned in Section \ref{sec:extension-typeclass}, it represents a left-biased monoid.
+Similarly to other operations, @morelse@ should obey a form of the naturality law. An operation of 
+monoid should be associative and have a unit element. In case of joinads, the unit is @mzero@:
+\begin{align*}
+  (u \morelse v) \morelse w &\equiv u \morelse (v \morelse w) \tag{associativity} \\
+  (\map \: f \: u) \morelse (\map \: f \: v) &\equiv \map \: f \: (u \morelse v) \tag{naturality} \\
+  u \morelse \mzero \equiv \: u &\equiv \mzero \morelse u \tag{unit}
+\end{align*}
+Both of the laws are important for joinads. The \textit{unit} law makes it required by the
+\textit{alternative noninterference} (4) transformation. The \textit{associativity} law does not 
+directly correspond to any transformation, but it specifies that the bracketing does not matter when
+aggregating the alternatives using $\morelse$. The \textit{associativity} law makes this an 
+implementation detail of the translation.
+
+The left bias of the |morelse_| operation is required by \textit{clause ordering} (3).
+The transformation gives the following law:
+\begin{align*}
+  u \morelse \map \: f \: u \equiv u \tag{left bias}
+\end{align*}
+The law considers a monadic value and a value that is created from it using @map@. When choosing 
+between the two, the $\morelse$ operation constructs a value that is equivalent to the left 
+argument. Intuitively, the @map@ operation creates a monadic value with the same structure as the 
+original. The law specifies that $\morelse$ prefers values from the left argument when both 
+arguments have the same structure.
+The \textit{left bias} law is different than the \textit{left catch} law that is 
+required about \ident{MonadOr} in the proposal \cite{monadplusreform}. We return to this topic in 
+Section \ref{sec:proposals-morelse}, which discusses proposals for Haskell libraries.
+
+Finally, perhaps the most intriguing law is required by the \textit{flattening} (9) transformation.
+The law relates the $\morelse$ operation with $\mzip$ and fits very nicely with the rest of the 
+theory: 
+\begin{align*}
+  a \mzip (b \morelse c) \equiv (a \mzip b) \morelse (a \mzip c) \tag{distributivity}
+\end{align*}
+In context of joinads, the law describes a situation when we have three monadic values and need to
+get a value of the first one together with the second or the third one. In this case, the choice
+can be done on the two alternative values or on the two alternatives combined with the always 
+required value.
+The law specifies only left distributivity, but thanks to the symmetry of $\mzip$, 
+it also implies right distributivity.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{MonadDuplicate type class}
+As discussed in Section \ref{sec:intro-aliasing-parallel}, the initial motivation for adding the 
+@mduplicate@ operation is to allow aliasing of computations. Interestingly, the type signature
+of the operation corresponds to the \textit{cojoin} operation of a \textit{comonad} (a categorical
+dual of monad). We first discuss the laws about @mduplicate@. The relation with comonads is 
+discussed later (Section \ref{sec:theory-comonads})
+
+The type signature of @mduplicate@ is |m a -> m (m a)|. The first law that relate it to 
+monads can be more easily expressed using the \textit{join} operation, which has a dual type: 
+|m (m a) -> m a|. For any monad join can be defined as $\textit{join} \: a = a \bind id$. 
+The required transformation \textit{binding equivalence} (1) specifies that the aliasing doesn't 
+have any effect when a computation is used just once. This maps to the following law (@mduplicate@
+is abbreviated as \textit{mdup}):
+\begin{align*}
+\text{join} \: (\mduplicate \: a) &\equiv a \tag{cancellation}
+\end{align*}
+In this law, applying @mduplicate@ to a value of type |m a| yields a value of type |m (m a)|. 
+Applying \textit{join} to the result should give the same |m a| value. We could also consider the 
+composition in the opposite order, but that is too restrictive. By flattening the type, 
+\textit{join} arguably removes some information about the structure, which cannot be, in general,
+recovered by @mduplicate@.
+
+The next two laws about @mduplicate@ are needed by the \textit{flattening}  (9) transformation. They
+specify that we can flatten nested applications of @mduplicate@ and that the |mzip_| operation
+can be lifted over @mduplicate@:
+\begin{align*}
+(\mduplicate \: m \bind f) \mzip n &\equiv \mduplicate \: m \bind (\mzip \: n) \circ f  \tag{lifting}\\
+\mduplicate \: (\mduplicate \: m \bind k) \bind l &\equiv \mduplicate \: m \bind l \circ k   \tag{nesting}
+\end{align*}
+Finally, we also require laws that specify how @mduplicate@ behaves with respect to |>>=|. The three 
+special cases cover @mzero@, @return@ and @mzip@. They are required by \textit{argument noninterference} 
+(5), \textit{matching units} (6) and \textit{matching images} (7):
+\begin{align*}
+\mduplicate \: \mzero \bind f &\equiv f \: \mzero \tag{zero}\\
+\mduplicate \: (\text{return} \: a) \bind f &\equiv f \: (\text{return} \: a) \tag{unit} \\
+\mduplicate \: (\map \: f \: m) \bind g &\equiv \mduplicate \: m \bind g \circ \map \: f \tag{naturality}
+\end{align*}
+The section \ref{sec:extension-typeclass} includes a default implementation of @mduplicate@ using 
+the @return@ operation of a monad. It is easy to see that this trivial definition obeys the above laws. 
+Using @return@ to define @mduplicate@ is always valid, but it isn't 
+always useful. In particular, aliasing was essential for the parallelism joinad.
+
+% ==================================================================================================
+
+\section{Theory of joinads}
+\label{sec:theory}
+
+This section expands on some ideas discussed from the previous section. We look at categorical 
+foundations of joinads and consider them as an algebraic structure.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Monoidal functors}
+\label{sec:theory-monoidal}
+
+The discussion about \ident{MonadZip} and \ident{Applicative} from Section \ref{sec:laws-monadzip}
+can be recast in terms of category theory. Haskell's monad is a monad in category theory and 
+\ident{Applicative} is a monoidal functor. Given a monad, we can construct a monoidal functor. The 
+\ident{MonadZip} type class with the laws given above corresponds to a \textit{symmetric monoidal 
+functor} and $\mzip$ is the natural transformation defined by it. This is another justification for 
+the \textit{naturality}, \textit{associativity} and \textit{symmetry} laws. 
+
+Joinads combine this symmetric monoidal functor with a monad and thus also a monoidal functor 
+specified by the monad. The underlying functor is the same, but the natural transformation and units 
+differ. The unit of the $\mzip$ operation is not needed by joinads, so we do not require users to 
+define it. In particular, this means that @return@ does not behave as unit with respect to $\mzip$. 
+For example, a unit for \ident{List} is a singleton list, but unit for \ident{ZipList} is an infinite
+list. 
+
+Zipping a list with an infinite list and then projecting out first elements of a tuple
+gives the original list, but the same isn't true for zipping with a singleton list.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Comonads}
+\label{sec:theory-comonads}
+
+\begin{figure}
+\begin{code}
+class Functor m => Comonad m where
+  cojoin :: m a -> m (m a)
+  coreturn :: m a -> a
+\end{code}
+\caption{Definition of \ident{Comonad} type class. }
+\label{fig:comonad-class}
+\end{figure}
+
+A comonad is a dual of monad. One way to define a comonad in Haskell is shown in 
+\ref{fig:comonad-class}. The definition extends \ident{Functor} with two additional operations. 
+A monad can be defined similarly by extending \ident{Functor} with dual operations.
+Although less frequent than monads, comonads are also a useful notion of computations in 
+functional programming \cite{comomads-ypnos, comonads-dataflow}.
+
+The @cojoin@ operation of a comonad could be used as the basis of @mduplicate@. Joinads do not 
+need the rest of the comonadic structure (the @coreturn@ operation). The @mzip@ operation is 
+defined similarly---it arises from some (symmetric) monoidal functor, but the rest of the structure 
+(the unit) is not needed. 
+
+Determining whether every @mduplicate@ operation should be defined by some comonad is a future
+work. However, we can partly explore it by looking at the comonad laws:
+\begin{align*}
+\map \: \text{cojoin} \: (\text{cojoin} \: a) &\equiv \text{cojoin} (\text{cojoin} \: a)\\
+\map \: (\map \: f) \: (\text{cojoin} \: a) &\equiv \text{cojoin} \: (\map \: f \: a)\\
+f (\text{coreturn} \: a) &\equiv \text{coreturn} \: (\map \: f \: a)\\
+\map \: \text{coreturn} \: (\text{cojoin} \: a) &\equiv \text{coreturn} \: (\text{cojoin} \: a) \equiv \text{id}
+\end{align*}
+The first two laws are defined just in terms of @map@ and @cojoin@, so they could be also required 
+by joinads. We did not include them, because they are not directly implied by any syntactic 
+transformations form section \ref{sec:reasoning}. The last two laws specify the behaviour of 
+@coreturn@, so they are not directly relevant to joinads.
+
+The discussion in the previous paragraph rises an interesting question from the theoretical 
+perspective. Monads and comonads are both useful notions of computations, but what if we work
+with computations that are both monadic and comonadic?
+
+Every monad arises from an adjunction. Given two functors adjoint functors 
+$F \dashv U$ with unit $\eta$ and counit $\epsilon$ where $F : \mathcal{C} \rightarrow \mathcal{D}$ 
+and $U : \mathcal{D} \rightarrow \mathcal{C}$, it is possible to define a monad $(T, \eta, \mu)$
+by taking $T = U \circ F$ and $\mu = U \eta F$. Interestingly, we can also define a comonad 
+$(S, \epsilon, \delta)$ by taking $S = F \circ U$ and $\delta = F \mu U$.
+
+A notion of computation that is both monadic and comonadic should have just a single functor,
+which means that we would require that $T \equiv S$. This implies that the functors $F$ and $U$ must 
+have the same domain and codomain. In particular, the two adjoint functors must be both definable
+in Haskell. Finally, the \textit{cancellation} law adds a requirement specifying that 
+$\mu \circ \delta = U \eta F^2 \mu U\equiv \textit{id}$. We consider this an interesting area
+for future work.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Joinad algebra} 
+\label{sec:theory-algebra}
+
+The laws about |mzip_| and |morelse_| discussed in the previous section suggest that 
+joinads can be modelled as an algebraic structure. The @mzero@ value behaves as \textit{zero}
+with respect to |mzip_| and as \textit{unit} with respect to |morelse_|. In addition, the
+|mzip_| operation distributes over |morelse_|. An algebraic structure that satisfies the 
+distributivity law is called a \textit{ringoid}.
+
+When given a set $J$ containing all monadic values of some type |m a|, we can view joinad as a 
+ringoid $(J, \morelse, \mzip)$. The @mzero@ value is a special element $0 \in J$.
+The structure $(J, \mzip)$ is a commutative semigroup with $0$ as the zero element and the
+structure $(J, \morelse)$ is a monoid with $0$ as the unit. This specification captures the 
+essence of joinads---the only thing that is left out is the left bias of the $\morelse$ 
+operation. As discussed in section \ref{sec:related-monadplus} this general case may be also 
+useful, but it doesn't fully capture the semantics inspired by the Haskell's @case@ construct.
+
+% ==================================================================================================
+
+\section{Feature interactions and library proposals}
+\label{sec:proposals}
+
+As already mentioned, joinads combine several type classes that are already known to the Haskell 
+community. This section discusses how joinads relate to other work based on the same type classes. 
+We also propose how to adjust the laws required by these type classes to better capture their 
+essence.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Parallel monad comprehensions}
+\label{sec:proposals-monadzip}
+
+Joinads use the @mzip@ operation of the \ident{MonadZip} type class to express parallel composition 
+of monadic computations. The operation is used when an alternative of @docase@ consists of multiple 
+binding patterns. The type class has been as part of \textit{parallel monad comprehensions} 
+\cite{bringbackmc, comprefun} extension in GHC.
+
+Monad comprehensions \cite{comprehendingmonads} are a generalization of list comprehensions for 
+working with arbitrary monads. A recent reimplementation of the idea generalizes additions to the 
+list comprehension language including grouping and ordering \cite{groupordercompre}, as well as 
+parallel list comprehensions. A parallel list comprehension contains multiple independent generators 
+separated by a bar:
+
+\begin{code}
+[ (i, c) | c <- ``Hello world!'' | i <- [ 0 .. ] ]
+\end{code}
+The syntax corresponds to using the @zip@ function, so the snippet creates a list of 
+pairs containing characters with their corresponding indices. A monadic version generalizes @zip@
+to the @mzip@ function and embeds it into a \ident{MonadZip} type class. The generalized syntax 
+can be used to encode parallel composition of parsers from the Section \ref{sec:intro-combining-parsers}
+(more details can be found in our article \cite{parcomprefun}):
+
+\begin{code}
+validPhone = 
+  [ num  | num  <- many (sat isDigit) 
+         | _    <- replicateM 10 item
+         | _    <- startsWith (string "1223") ]
+\end{code}
+The desugaring of this snippet is exactly the same as the initial desugaring of @docase@ presented in 
+Section \ref{sec:intro-combining-parsers}. This suggests that a \textit{parallel monad comprehension}
+expression is equivalent to a @docase@ expression which has generator expressions as arguments and 
+consists a single alternative with body containing @return@. The actual desugaring of joinads is more 
+complicated as it adds aliasing and wrapping to support commit points. However, these additional 
+features do not have any effect in this simple case.
+
+\subsection{Monad comprehension laws} 
+At the time of writing, the extension adding parallel monad comprehensions and 
+\ident{MonadZip} required the following laws:
+\begin{align*}
+  \map \: f \: a \mzip \map \: g \: b &\equiv \map \: (f \times g) \: (a \mzip b) \tag{naturality} \\
+  \map \: \text{fst} \: (a \mzip b) &\equiv a \tag{information preservation} 
+\end{align*}
+
+\paragraph{Monoidal laws.}
+The \textit{naturality} law was also proposed for joinads (Section \ref{sec:laws-monadzip}). It
+arises from the joinad laws, but also from the fact that the @mzip@ operation is defined by a 
+monoidal functor. 
+
+\begin{itemize}
+\item We propose adding \textit{associativity} law. The law also arises from a monoidal functor,
+  therefore it seems very reasonable to require the two laws together.
+  
+\item We believe that symmetry is an essential aspect of @mzip@ and we argue that 
+  the \textit{symmetry} law should be included.
+
+\end{itemize}
+The symmetry of @mzip@ holds for lists as well as for the \ident{MonadZip} instances presented in 
+this paper. In terms of parallel monad comprehensions, the law guarantees the following 
+equivalence:
+
+\begin{code}
+[(a, b) | a <- m^sub(1) | b <- m^sub(2)] == [(a, b) | a <- m^sub(2) | b <- m^sub(1)]
+\end{code}
+The symmetry law means that the @mzip@ operation cannot be automatically implemented in 
+terms of |>>=| and @return@. This is a useful requirement---it says that the additional syntax
+should also have an additional meaning. It is still possible to get @mzip@ for free, 
+but only for \textit{commutative monads}. For some monads, such as the @Reader@ monad, parallel 
+composition doesn't add any additional behaviour. More information about the relations with 
+commutative monads can be found in our previous work \cite{joinads, eventsthesis}.
+
+\paragraph{Relation with map.}
+The \textit{information preservation} law specifies that we can recover the original monadic values 
+from a monadic value created using |mzip_|. This law is problematic. It doesn't hold for lists |a| 
+and |b| of different length. The @zip@ function restricts the length of the result to the length 
+of the shorter list.
+
+The problem is that the law allows applying @mzip@ to inputs with different structure (in case of 
+lists, the length of the list), but recovering the original values is only possible if their 
+structure is the same. Using \textit{naturality} and the \textit{duplication} law, we can derive the
+following law that looks similar and clarifies the requirement about the structure of values:
+
+\begin{align*}
+  \map \: \text{fst} \: (a \mzip \: \map f a) \equiv a \equiv \map \: \text{snd} \: (\map \: g \: a \: \mzip \: a)
+\end{align*}
+Instead of zipping two arbitrary monadic values, the law zips a value with an image created using 
+@map@ (using some complete functions |f| and |g|). Thanks to the properties of @map@,
+the law only concerns zipping of monadic values with the same structure.
+
+\begin{itemize}
+\item The \textit{information preservation} law does not hold for many standard implementations of 
+  @mzip@, so we propose replacing it with the weaker form or with equivalent \textit{duplication} law.
+
+\item In terms of monad comprehensions, the \textit{product} law of joinads states that 
+  |[(ma, mb)|| ma <- return a || mb <- return b]| should be equivalent to |return (a, b)|. We find 
+  this a useful requirement for monad comprehensions.
+\end{itemize}
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Left-biased additive monads}
+\label{sec:proposals-morelse}
+
+The class of monads that provide a special zero value of type |m a| and an operation of type 
+|mplus_ :: m a -> m a -> m a| can be captured using the \ident{MonadPlus} type class. It is widely 
+accepted that such a monad should form a monoid:
+
+\begin{align*}
+  \mzero \mplus u &\equiv u \equiv u \mplus \mzero \tag{monoid identity}\\
+  (u \mplus v) \mplus w &\equiv u \mplus (v \mplus w) \tag{monoid associativity}
+\end{align*}
+However, there is some disagreement about the additional laws. The \ident{MonadPlus} reform proposal
+\cite{monadplusreform} provides a solution by splitting the type class into \ident{MonadPlus} 
+obeying \textit{left distribution} law and \ident{MonadOr} obeying \textit{left catch} law. The
+\textit{left bias} law that we require for joinads (Section \ref{sec:laws-monador}) adds a third
+alternative:
+
+\begin{align*}
+  u \mplus v \bind f &\equiv (u \bind f) \mplus (v \bind f) \tag{left distribution}\\
+  (\text{return} \: a) \mplus u &\equiv \text{return} \: a \tag{left catch} \\
+  u \morelse \map \: f \: u &\equiv u \tag{left bias}
+\end{align*}
+It is not difficult to find counter-examples showing that none of the three laws implies some other.
+Both \textit{left bias} and \textit{left catch} represent some form of left bias, but in a 
+different way. 
+
+\begin{itemize}
+\item The \textit{left bias} law uses an arbitrary value as the left
+  and a special value (constructed using @map@) as the right argument. 
+
+\item The \textit{left catch} law uses an arbitrary value as the right 
+  and a special value (constructed using @unit@) as the left argument. 
+\end{itemize}
+Despite the difference, the main purpose of the two laws is the same. They both specify that the 
+operation is left biased. Which law should hold about \ident{MonadOr}? One option is to consider 
+upper or lower bound of the two laws:
+
+\begin{align*}
+  (\text{return} \: a) \mplus (\text{return} \: b) &\equiv \text{return} \: a \tag{lower bound} \\
+  u \morelse u \bind f &\equiv u \tag{upper bound}
+\end{align*}
+The \textit{upper bound} implies by both left bias and left catch, while the \textit{lower
+bound} is implied by any of the two. It is not clear to us whether any monad can provide a 
+non-trivial implementation of |mplus_| satisfying the \textit{upper bound} law. 
+The \textit{lower bound} law is more appropriate, although it isn't sufficient to prove that the 
+\textit{clause ordering} equation from Section \ref{sec:reasoning} holds.
+
+Another option is to accept \textit{left bias} as a law of \ident{MonadOr}. The most prominent 
+monad that implements \ident{MonadOr} is the \ident{Maybe} monad, which obeys both of the laws. In
+addition, we can give a useful implementation of @morelse@ that obeys the left bias law for 
+the \ident{List} monad. The two declarations are shown in Figure \ref{fig:monador-instances}.
+
+\begin{figure}
+\label{fig:monador-instances}
+\begin{code}
+instance MonadOr List where
+  morelse (x:xs) (y:ys) = x:(morelse xs ys)
+  morelse [] ys = ys
+  morelse xs [] = xs
+
+instance MonadOr Maybe where
+  morelse (Just a) _ = (Just a)
+  morelse Nothing b = b
+\end{code}
+\caption{Instance of \ident{MonadOr} that obey left bias law}
+\end{figure}
+
+% ==================================================================================================
+
+\section{Related and future work}
+\label{sec:related}
+
+We first presented an earlier version joinads in the \fsharp language \cite{joinads} using 
+different examples that also included embedding of join calculus. An article for
+The Monad.Reader \cite{parcomprefun} provides more details on the relation between joinads
+and \textit{monad comprehensions}.
+
+The rest of this section presents some of the important related work on pattern matching, concurrent
+programming and abstract computation types. We also briefly introduce preliminary ideas that 
+could be interesting topic for future work.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Backtracking and committing patterns}
+\label{sec:related-monadplus}
+
+The existing work on pattern matching has focused on enabling pattern matching on abstract values 
+using views \cite{views-haskell, views-sml}. A similar concept also appeared in \fsharp and Scala 
+\cite{scala-patternmatching, activepatterns}. Making patterns first-class made it possible to encode 
+Join calculus in Scala \cite{scala-encodingjoins}, although the encoding is somewhat opaque.
+
+Several authors \cite{firstlcasspats, activepatterns} have suggested generalizing the result of 
+pattern matching from \ident{Maybe} (representing a failure or a success) to any additive monad 
+using the \ident{MonadPlus} type class. The concrete examples included encoding of backtracking 
+using the \ident{List} monad and composing transactions using \ident{STM}.
+
+The following example uses parsers to demonstrates the difference between joinads and the 
+interpretation based on \ident{MonadPlus}. Assuming standard set of parser combinators, we can write:
+
+\begin{code}
+body = mcase_ char '(', many item of 
+  _, ? -> do  str <- body
+              _ <- char ')'
+              return str
+  ?, str -> return str
+\end{code}
+The @mcase@ construct (similar to our @docase@) represents a monadic pattern matching using 
+\ident{MonadPlus}. In the syntax designed for active patterns \cite{activepatterns}, monadic 
+values were produced by \textit{active patterns} that produced monadic values. For parsers, the 
+type of active patterns would be |a -> Parser b|. This leads to a different syntax, but it is 
+possible to translate between the two options.
+
+The proposed translation using \ident{MonadPlus} follows similar pattern as the translation of joinads,
+but differs in three ways:
+
+\begin{code}
+(char '(' >>= \_ -> body >>= \str ->
+    char ')' >>= \_ -> return str) mplus_
+(many item >>= \str -> return str)
+\end{code}
+The first difference (apparent from this example) is that the proposed encoding using \ident{MonadPlus}
+does not add additional wrapping around the body of the alternatives to support committing to an 
+alternative. The second difference is that \ident{MonadPlus} usually requires the \textit{left
+distributivity} law instead of the \textit{left bias} law required by \ident{MonadOr}. Finally, the 
+third difference (not demonstrated by the snippet) is that multiple binding patterns are translated 
+using nested |>>=| instead of a special operation provided by \ident{MonadZip}. 
+
+\begin{itemize}
+\item When using the \ident{MonadOr} laws, the |mplus_| operation attempts to parse the input using the
+  first alternative. Other alternatives are considered only if the first one fails. The parser from 
+  the example above would deterministically parse ``((1))'' as ``1''. The laws of \ident{MonadPlus} 
+  make the resulting parser non-deterministic and so it parses the same input as one of the following
+  three options: ``1'', ``(1)'' or ``((1))''.
+
+\item Without the additional wrapping, the parser needs to implement backtracking. If the
+  input is ``(1'', the first alternative is selected, but it fails, meaning that the left argument of 
+  |mplus_| will be a failure. Therefore the parser needs to backtrack and try the second alternative. 
+  Adding the wrapping means that the parser will commit to the first alternative. Running the parser
+  specified by the body eventually fails, so the result will be a failure.
+
+\item The fact that joinads use a special @mzip@ operation for combining multiple inputs means that 
+  we can require a symmetric operation even for non-commutative monads. Additionally, using a 
+  separate @mzip@ operation may enable additional optimizations, for example, in the \ident{STM} monad.
+
+\end{itemize}
+The example above shows that all of the options may have a feasible meaning for some monads. The 
+version based on joinads seems more appropriate for modern monadic parsers such as Parsec 
+\cite{parsec}, which provides left-biased @monador@ as the @<|>@ combinator.
+
+In conclusion, we find the joinad-based semantics of @docase@ that supports commit points more 
+appropriate for monads from functional programming. The variant using \ident{MonadPlus} often 
+implies backtracking and thus may be more suitable for logic programming languages such as Prolog. 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Commit points in remote procedure calls}
+The discussion about commit points in Section \ref{sec:intro-commit-poorman} was inspired by 
+Concurrent ML (CML) \cite{concurrentml}. CML is a concurrent programming language built on top
+of Standard ML. It supports first-class synchronization values called \textit{events} that can 
+be used to encode many common concurrent programming patterns.
+
+Joinads, on the other hand, capture a single pattern that we find extremely important. To 
+demonstrate the relation between joinads and CML, we consider two options for implementing a 
+remote procedure call (RPC). Assume we have a monad for synchronous (blocking) communication
+and monadic values @send@, @recv@ that represent sending request to a server and receiving
+a response from the server. As an alternative to performing the RPC call, the client can choose
+to perform @other@ operation.
+
+One way to implement the RPC call is to initiate a call, but allow abandoning the RPC communication
+at any time until it completes. This means that receiving a response from the server is used
+as a commit point for the RPC call:
+
+\begin{code}
+docase_ send, recv, other of
+  (), res, ?  -> handleRpc res
+  ?, ?, o     -> handleOther
+\end{code}
+We can assume that the event @recv@ becomes enabled after @send@, so the first alternative becomes
+enabled after the server replies. The second alternative will be selected if the @other@ event is
+enabled earlier. This may, or may not, be before the server accepts the request and @send@ event
+becomes enabled.
+
+The second way to implement a RPC call is to allow abandoning the RPC communication only before
+the server accepts the communication request. After that, the client needs to wait for @recv@ event
+and cannot choose @other@ instead:
+
+\begin{code}
+docase_ send, other of
+  (), ?  ->  do res <- recv
+             handleRpc res
+  ?, o   ->  handleOther
+\end{code}
+In this version of code, the @docase@ construct only chooses between @send@ and @other@. Once the
+first alternative is selected, it has to wait for the server response using @recv@.
+
+This section demonstrates that joinads can capture the two essential patterns for writing RPC
+communication as introduced in Concurrent ML. This example critically relies on the support for
+commit points introduced in Section \ref{sec:intro-commit-poorman}. When using the simple encoding
+discussed in Section \ref{sec:related-monadplus}, the two expressions would translate to the 
+same meaning.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Joinads and other computation types}
+Joinads extend monads to support the @docase@ construct, but functional languages use several other
+notions of computations. In the future, it may be interesting to consider how other computations
+relate to generalized pattern matching. Comonads (a categorical dual of monads) \cite{comonads-codata} 
+have been used for encoding data-flow programs \cite{comonads-dataflow}, but also for stencil 
+computations using special \textit{grid patterns} \cite{comomads-ypnos}. Arrows 
+\cite{generalisingmonads, causalarr} are used mainly in functional reactive programming research 
+\cite{arrows-frp} and can be written using the arrow notation \cite{arrows-notation} (in a similar 
+way monads use the do notation).
+
+Another notion of computation is called \textit{applicative functors} \cite{applicative} or 
+\textit{idioms}, which are weaker than monads and can thus capture larger number of computations. 
+Haskell libraries also include an \ident{Alternative} type class that extends applicative functors 
+with a |diamond_| operator similar to |mplus_| from \ident{MonadPlus} or \ident{MonadOr}. The 
+declaration is shown in Figure \ref{fig:alternative-typeclass}. To make the following explanation 
+easier, the figure uses \ident{Monoidal} type class, which is equivalent to the more common 
+\ident{Applicative} class (as discussed by McBride and Patterson \cite{applicative} in Section 7). 
+
+\begin{figure}
+\begin{code}
+class Functor f => Monoidal f where
+  unit :: f ()
+  (star_) :: f a -> f b -> f (a, b)
+
+class Monoidal f => Alternative f where
+  empty :: f a
+  (diamond_) :: f a -> f a -> f a
+\end{code}
+\label{fig:alternative-typeclass}
+\caption{\ident{Alternative} type class}
+\end{figure}
+
+Interestingly, the operations of \ident{Alternative} have the same types as the two most essential 
+operations of joinads. The |star_| operation has the same type as our @mzip@, representing parallel 
+composition, and |diamond_| has the type of @morelse@, representing a choice. This suggests that 
+\ident{Alternative} may define a weaker variant of joinads in a similar way in which applicative 
+functors are weaker than monads.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Applications}
+We demonstrated that the @docase@ language extension can be used for working with many common 
+monads. When using monadic parser combinators \cite{monadparsing} the @morelse@ operation
+represents a left-biased choice as supported in \cite{parsec}. As discussed in our earlier article,
+our implementation of parallel composition (the @mzip@ operation) corresponds to the intersection
+of context-free grammars \cite{parcomprefun}. We are not aware of any parser combinator library that
+provides this operation, but it seems to be very useful for validation of inputs (finding inputs
+that do not match any of the given parsers).
+
+The reactive programming examples used in this paper were based on imperative streams developed by 
+Scholz \cite{imperative-streams}. Imperative streams are essentially monads for synchronous 
+reactive programming. A Push-Pull Functional Reactive Programming framework developed by Elliott 
+\cite{push-pull-frp} includes a monad instance for events, so it could likely benefit from the
+@docase@ syntax too.
+
+The parallel programming model that we presented can be added to various existing Haskell frameworks.
+Our earlier article \cite{parcomprefun} used strategies \cite{strategies-new}. In this paper,
+we embedded the examples in the \ident{Par} monad \cite{parmonad} with several extensions that 
+allow writing speculative computations \cite{parmonad-cancellation}. The programming model is very
+similar to the @pcase@ construct provided by Manticore \cite{manticore}.
+
+% ==================================================================================================
+
+\section{Conclusions}
+This paper presented a characterization of monadic computations that provide two 
+additional operations: \textit{parallel composition} and \textit{choice}. 
+These two operations are not new to Haskell. In fact, they are already captured by \ident{MonadZip} 
+and \ident{MonadPlus} type classes. We combined these two and an additional operation that captures
+\textit{aliasing} of computations and we designed a @docase@ notation that makes it easy to compose
+computations using these operations.
+
+The @docase@ notation is inspired by our previous work on joinads in \fsharp. However, this paper
+uses a simpler operations that are amenable to formal reasoning. We started with a set of semantic preserving
+transformations that are intuitively expected to hold about the @docase@ construct and derived a set
+of laws about primitive operations that define joinads as an algebraic structure and show how some 
+of the operations related to category theory.
+
+Finally, we also made several concrete library proposals based on our work. In particular, we support
+the proposal to distinguish between unbiased \ident{MonadPlus} and left-biased \ident{MonadOr} and we
+propose a refined set of laws that should hold about \ident{MonadZip}. We demonstrated the
+usefulness of our extension using a wide range of monads including reactive and parallel programming
+as well as input validation using monads. 
+
+% ==================================================================================================
+
+\acks
+Acknowledgments (to be added).
+
+% ==================================================================================================
+
+\begin{thebibliography}{37}
+\raggedright
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[bri()]{bringbackmc}
+Bring back monad comprehensions.
+\url{http://tinyurl.com/ghc4370}.
+
+\bibitem[mon()]{monadplusdoc}
+Control.monoad, haskell documentation.
+
+\bibitem[Brown(2008)]{chp-monad}
+N.~C.~C. Brown.
+\newblock {C}ommunicating {H}askell {P}rocesses: {C}omposable {E}xplicit
+  {C}oncurrency using {M}onads.
+\newblock In \emph{{C}ommunicating {P}rocess {A}rchitectures 2008}, pages
+  67--83, 2008.
+
+\bibitem[Claessen(1999)]{poorman}
+K.~Claessen.
+\newblock A poor man's concurrency monad.
+\newblock \emph{Journal of Functional Programming}, 9:\penalty0 313--323, May
+  1999.
+\newblock ISSN 0956-7968.
+
+\bibitem[Elliott(2009)]{push-pull-frp}
+C.~Elliott.
+\newblock Push-pull functional reactive programming.
+\newblock In \emph{Haskell Symposium}, 2009.
+\newblock \url{http://conal.net/papers/push-pull-frp}.
+
+\bibitem[Emir et~al.(2007)Emir, Odersky, and Williams]{scala-patternmatching}
+B.~Emir, M.~Odersky, and J.~Williams.
+\newblock Matching objects with patterns.
+\newblock In \emph{ECOOP 2007}, 2007.
+
+\bibitem[Fluet et~al.(2010)Fluet, Rainey, Reppy, and Shaw]{manticore}
+M.~Fluet, M.~Rainey, J.~Reppy, and A.~Shaw.
+\newblock Implicitly threaded parallelism in manticore.
+\newblock \emph{Journal of Functional Programming}, 20\penalty0 (Special Issue
+  5-6):\penalty0 537--576, 2010.
+
+\bibitem[Haller and Van~Cutsem(2008)]{scala-encodingjoins}
+P.~Haller and T.~Van~Cutsem.
+\newblock Implementing {J}oins using {E}xtensible {P}attern {M}atching.
+\newblock In \emph{Proceedings of the 10th {I}nternational {C}onference on
+  {C}oordination {M}odels and {L}anguages}, 2008.
+
+\bibitem[HaskellWiki(2011)]{monadplusreform}
+HaskellWiki.
+\newblock Monadplus reform proposal, 2011.
+\newblock \url{http://tinyurl.com/monadplus-reform-proposal}.
+
+\bibitem[Hudak et~al.(2003)Hudak, Courtney, Nilsson, and Peterson]{arrows-frp}
+P.~Hudak, A.~Courtney, H.~Nilsson, and J.~Peterson.
+\newblock Arrows, robots, and functional reactive programming.
+\newblock In \emph{Advanced Functional Programming}, volume 2638 of
+  \emph{LNCS}, pages 1949--1949. 2003.
+
+\bibitem[Hughes(1998)]{generalisingmonads}
+J.~Hughes.
+\newblock Generalising monads to arrows.
+\newblock \emph{Science of Computer Programming}, 37:\penalty0 67--111, 1998.
+
+\bibitem[Hutton and Meijer(1998)]{monadparsing}
+G.~Hutton and E.~Meijer.
+\newblock {Monadic Parsing in Haskell}.
+\newblock \emph{Journal of Functional Programming}, 8\penalty0 (4):\penalty0
+  437--444, July 1998.
+
+\bibitem[Jones and Wadler(2007)]{groupordercompre}
+S.~P. Jones and P.~Wadler.
+\newblock Comprehensive comprehensions.
+\newblock In \emph{Haskell'07}, pages 61--72, 2007.
+
+\bibitem[Kieburtz()]{comonads-codata}
+R.~B. Kieburtz.
+\newblock Codata and comonads in haskell.
+
+\bibitem[Kmett(2011)]{comonadpkg}
+E.~A. Kmett.
+\newblock The comonad package, 2011.
+\newblock \url{http://hackage.haskell.org/package/comonad}.
+
+\bibitem[Leijen and Meijer(2001)]{parsec}
+D.~Leijen and E.~Meijer.
+\newblock Parsec: Direct style monadic parser combinators for the real world.
+\newblock Technical Report UU-CS-2001-27, Department of Computer Science,
+  Universiteit Utrecht, 2001.
+
+\bibitem[Liu et~al.(2009)Liu, Cheng, and Hudak]{causalarr}
+H.~Liu, E.~Cheng, and P.~Hudak.
+\newblock Causal commutative arrows and their optimization.
+\newblock In \emph{ICFP'09}, pages 35--46, 2009.
+
+\bibitem[Marlow et~al.(2010)Marlow, Maier, Loidl, Aswad, and
+  Trinder]{strategies-new}
+S.~Marlow, P.~Maier, H.-W. Loidl, M.~K. Aswad, and P.~Trinder.
+\newblock Seq no more: better strategies for parallel haskell.
+\newblock In \emph{Haskell Symposium}, 2010.
+
+\bibitem[McBride and Paterson(2007)]{applicative}
+C.~McBride and R.~Paterson.
+\newblock Applicative programming with effects.
+\newblock \emph{Journal of Functional Programming}, 18:\penalty0 1--13, 2007.
+
+\bibitem[Okasaki(1998)]{views-sml}
+C.~Okasaki.
+\newblock Views for standard ml.
+\newblock In \emph{ML Workshop}, 1998.
+
+\bibitem[Orchard et~al.(2010)Orchard, Bolingbroke, and Mycroft]{comomads-ypnos}
+D.~A. Orchard, M.~Bolingbroke, and A.~Mycroft.
+\newblock Ypnos: declarative, parallel structured grid programming.
+\newblock DAMP '10, 2010.
+
+\bibitem[Paterson(2001)]{arrows-notation}
+R.~Paterson.
+\newblock A new notation for arrows.
+\newblock In \emph{International Conference on Functional Programming}, pages
+  229--240. ACM Press, Sept. 2001.
+
+\bibitem[Petricek(2010)]{eventsthesis}
+T.~Petricek.
+\newblock Reactive programming with events.
+\newblock Master's thesis, Charles University in Prague, 2010.
+
+\bibitem[Petricek(2011{\natexlab{a}})]{parcomprefun}
+T.~Petricek.
+\newblock Fun with parallel monad comprehensions, 2011{\natexlab{a}}.
+\newblock \url{http://tbd.net}.
+
+\bibitem[Petricek(2011{\natexlab{b}})]{parmonad-cancellation}
+T.~Petricek.
+\newblock Explicit speculative parallelism for haskell's par monad,
+  2011{\natexlab{b}}.
+\newblock \url{http://tomasp.net/blog/speculative-par-monad.aspx}.
+
+\bibitem[Petricek and Syme(2011)]{joinads}
+T.~Petricek and D.~Syme.
+\newblock Joinads: A retargetable control-flow construct for reactive, parallel
+  and concurrent programming.
+\newblock In \emph{PADL'11}, pages 205--219, 2011.
+
+\bibitem[Reppy(2007)]{concurrentml}
+J.~H. Reppy.
+\newblock \emph{Concurrent programming in ML}.
+\newblock Cambridge University Press, 2007.
+\newblock ISBN 978-0-521-71472-3.
+
+\bibitem[Scholz(1998)]{imperative-streams}
+E.~Scholz.
+\newblock Imperative streams-a monadic combinator library for synchronous
+  programming.
+\newblock ICFP, 1998.
+
+\bibitem[Schweinsberg(2010)]{comprefun}
+N.~Schweinsberg.
+\newblock Fun with monad comprehensions, 2010.
+\newblock \url{http://tinyurl.com/comprehension-fun}.
+
+\bibitem[Simon~Marlow(2011)]{parmonad}
+S.~P.~J. Simon~Marlow, Ryan~Newton.
+\newblock A monad for deterministic parallelism, 2011.
+\newblock \url{http://tinyurl.com/monad-par}.
+
+\bibitem[Swierstra(2008)]{parsingtutorial}
+S.~D. Swierstra.
+\newblock Combinator parsing: A short tutorial.
+\newblock Technical report, Utrecht University, 2008.
+\newblock \url{http://tinyurl.com/parsing-tutorial}.
+
+\bibitem[Syme et~al.(2007)Syme, Neverov, and Margetson]{activepatterns}
+D.~Syme, G.~Neverov, and J.~Margetson.
+\newblock Extensible pattern matching via a lightweight language extension.
+\newblock ICFP, 2007.
+
+\bibitem[Trinder et~al.(1998)Trinder, Hammond, Loidl, and {Peyton
+  Jones}]{strategies-old}
+P.~W. Trinder, K.~Hammond, H.-W. Loidl, and S.~L. {Peyton Jones}.
+\newblock Algorithm + {S}trategy = {P}arallelism.
+\newblock \emph{Journal of Functional Programming}, 8\penalty0 (1):\penalty0
+  23--60, Jan. 1998.
+
+\bibitem[Tullsen(2000)]{firstlcasspats}
+M.~Tullsen.
+\newblock First class patterns.
+\newblock In \emph{PADL 2000}, 2000.
+
+\bibitem[Uustalu and Vene(2005)]{comonads-dataflow}
+T.~Uustalu and V.~Vene.
+\newblock The essence of dataflow programming.
+\newblock In \emph{APLAS}, pages 2--18, 2005.
+
+\bibitem[Wadler(1987)]{views-haskell}
+P.~Wadler.
+\newblock Views: a way for pattern matching to cohabit with data abstraction.
+\newblock POPL, 1987.
+
+\bibitem[Wadler(1990)]{comprehendingmonads}
+P.~Wadler.
+\newblock Comprehending monads.
+\newblock In \emph{Proceedings of the 1990 ACM conference on LISP and
+  functional programming}, pages 61--78, 1990
+
+\end{thebibliography}
+
+% ==================================================================================================
+
+\appendix
+
+\section{Explicit shortcircuiting}
+\label{sec:appendix-shortcircuit}
+The motivating example in \ref{sec:motivation} used @docase@ and the \ident{Par} monad to implement
+a @forall@ function for trees. The function takes a predicate and tests whether it holds for any
+value stored in any leaf of the tree. The function should process both subtrees in parallel and
+it should implement shortcircuiting behaviour. This means that it should immediately return when
+the predicate does not hold for some value. The following listing implements the same functionality
+directly (using an extension that allows cancellation of tasks \cite{parmonad-cancellation}).
+
+\begin{code}
+forall :: (a -> Bool) -> Tree a -> Par Bool
+
+forall p tree = do
+    tok <- newCancelToken
+    r <- forall' tok tree
+    cancel tok 
+    return r
+  where 
+    forall' tok (Leaf v) = return (p v)
+    forall' tok (Node left right) = do
+      leftRes <- new
+      rightRes <- new
+      finalRes <- newBlocking
+      forkWith tok (forall' tok left >>= 
+        completed leftRes rightRes finalRes)
+      forkWith tok (forall' tok right >>= 
+        completed rightRes leftRes finalRes)
+      get finalRes
+    
+    completed varA varB fin resA = do
+      put varA resA
+      if not resA then put fin False
+      else get varB >>= put fin . (&& resA)
+\end{code}
+
+The main body of the function creates a new cancellation token using @newCancelToken@ and then 
+calls a helper that does the actual processing. The cancellation token is used when starting any 
+background computations during the recursive processing. As a result, when the helper function returns 
+@False@ (meaning that some computations may be still running), we can cancel all (still running, but 
+unnecessary) computations using this single token.
+
+The function that implements the recursive processing first creates three variables. The first two 
+(@leftRes@ and @rightRes@) are used by their corresponding computations (when a left computation completes, 
+it writes result to @leftRes@). The last variable is created using the @newBlocking@, which creates a
+variable that blocks computations that attempt to write into it when it is full. The function then spawns 
+two tasks to process sub-trees and waits for the final result.
+
+The two background computations spawned by the function both make a recursive call and then pass the 
+result to the completed function. It takes all three variables (variable of the currently completed 
+computation, variable of the other computation and a final result variable) and the result of the 
+computation. If the result is @False@, then it sets the final result. Otherwise, it waits until the 
+other computation completes and then sets the final result.
+
+\begin{comment}
+\newpage
+\section{Proofs}
+\todo{This will not fit into the 12 page limit, but we can leave it online. Anyway,
+the section will include proofs to demonstrate that the syntactic transformations
+can be really done if the laws hold. This is not particularly interesting (technically)
+--- just basic calculations using laws, but it is probably good to have it --- especially
+because mostly did that already.}
+
+% 1) Binding equivalence cancellation (MonadDuplicate)
+% 2) Argument ordering   associativity & commutativity of mzip
+% 3) Clause ordering     special law aboutt morelse
+% 4) Alternative nointef monoid unit of morelse & right zero of binding
+% 5) Argument nointef    monoid zero of mzip    & left zero of binding & unit of morelse
+% 6) Matching units      zipping units of mzip
+% 7) Matching images     naturaility   of mzip
+% 8) Matching duplicate  zipping dupl. of mzip
+% 9) Flattening          distributivity
+
+
+The following is the proof of binding equivalence using the laws about \ident{MonadDuplicate}:
+\begin{code}
+  mduplicate m >>= \m -> (m >>= \v -> return e) >>= id
+= mduplicate m >>= \m -> m >>= \v -> (\v -> return e) v >>= id  -- associativity
+= mduplicate m >>= \m -> m >>= \v -> return e >>= id            -- eta conversion
+= mduplicate m >>= \m -> m >>= \v -> id e                       -- left identity
+= mduplicate m >>= \m -> id m >>= \v -> e                       -- add/remove id
+= (mduplicate m >>= id) >>= (\v -> e)                           -- associativity back
+= (join (mduplicate m)) >>= (\v -> e)                           -- definition of >>=
+= m >>= (\v -> e)                                               -- mduplicate law
+\end{code}
+
+\begin{code}
+mduplicate m  >>= \m ->
+mduplicate n1 >>= \n1 ->
+mduplicate n2 >>= \n2->
+(m * n1 >>= f1) +
+(m * n2 >>= f2)
+
+mduplicate m  >>= \m ->
+mduplicate ( mduplicate n1 >>= \n1 ->
+             mduplicate n2 >>= \n2-> 
+             (n1 >>= g1) + (n2 >>= g2) ) >>= f ->
+(f * m) >>= f
+
+mduplicate m  >>= \m ->
+mduplicate ( mduplicate n1 >>= \n1 -> mduplicate n2 >>= \n2-> (n1 >>= g1) + (n2 >>= g2) ) >>= f ->
+(f * m) >>= f
+
+mduplicate m  >>= \m ->
+mduplicate n1 >>= \n1 -> 
+mduplicate n2 >>= \n2 -> 
+(n1 >>= g1) + (n2 >>= g2) * m >>= ff
+  
+  
+
+    (mduplicate m >>= f) * n ==  mduplicate m >>= \m -> f m * n
+    mduplicate (mduplicate m >>= k) >>= l ==  mduplicate m >>= l . k
+
+    mduplicate mzero >>= f == f mzero
+    mduplicate (return a) >>= f == f (return a)
+    mduplicate (map f m) >>= g == mduplicate m >>= g . map f
+
+
+mduplicate a >>= \a ->
+mduplicate a >>= \b ->
+a * b >>= f
+
+
+    (mduplicate m >>= f) * n
+==  mduplicate m >>= \m -> f m * n
+
+    mduplicate (mduplicate m >>= k) >>= l
+                     mma      ma -> mb
+                     mb               
+                mmb                  mb -> mc
+                     mc
+==  mduplicate m >>= l . k
+\end{code}
+\end{comment}
+
+
+
+\end{document}
+
+
+
+
+
+
+
+

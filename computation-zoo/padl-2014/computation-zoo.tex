@@ -1,0 +1,364 @@
+\documentclass[runningheads,a4paper]{llncs}
+
+\usepackage{amssymb}
+\setcounter{tocdepth}{3}
+\usepackage{graphicx}
+\usepackage{multicol}
+\usepackage{amsmath}
+\usepackage{semantic}
+\usepackage{verbatim}
+\usepackage{stmaryrd}
+\usepackage{color}
+\usepackage{textcomp}
+\usepackage{hyperref}
+\usepackage{breakurl}
+
+\begin{document}
+
+\title{The F\# Computation Expressions Zoo}
+\author{Tomas Petricek\inst{1} \and Don Syme\inst{2}}
+\institute{University of Cambridge, UK\and Microsoft Research Cambridge, UK \\
+\textsf{tp322@cam.ac.uk}, \textsf{dsyme@microsoft.com}}
+
+
+\maketitle
+
+% ==================================================================================================
+
+\newcommand{\sep}[0]{\; | \;}
+\newcommand{\kvd}[1]{\textnormal{\bfseries\sffamily #1}}
+\newcommand{\plc}[1]{\textnormal{\emph{#1}}}
+\newcommand{\ident}[1]{\textnormal{\sffamily #1}}
+
+\newcommand{\cexpr}{\plc{cexpr}}
+\newcommand{\expr}{\plc{expr}}
+\newcommand{\pat}{\plc{pat}}
+
+% ==================================================================================================
+
+\begin{abstract}
+Many computations can be structured using abstract types such as monoids, monad transformers or 
+applicative functors. Functional programmers use those abstractions directly, but main-stream
+languages often integrate concrete instances as language features -- e.g. generators in Python
+or asynchronous computations in C\# 5.0. The question is, is there a sweet spot between convenient 
+but inflexible language feature and flexible, but more difficult to use library?
+
+\quad F\# \emph{computation expressions} answer this question in affirmative. Unlike 
+the do notation in Haskell, computation expressions are not tied to a single kind of abstraction.
+They support a wide range of computations, depending on what operations are available. They also 
+provide greater syntactic flexibility leading to a more intuitive syntax.
+
+\quad We show that computation expressions can structure well-known computations such as monoidal 
+list comprehensions, monadic parsers, applicative formlets and asynchronous sequences based on the 
+list monad transformer. We also present typing for computation expressions that is capable of 
+capturing all these applications.
+\end{abstract}
+
+% ==================================================================================================
+
+\section{Introduction}
+Structures like monads [1] provide a way for composing computations with additional features. 
+There are many examples -- monads can be composed using monad transformers [2], applicative
+functors provide a more general abstraction useful for web programming [3] and additive monads
+are useful for parsers [4].
+
+In Haskell, we can write such computations using a mix of combinators and syntactic extensions like 
+monad comprehensions [19] and do notation. On the other hand, languages such as Python and C\# 
+emphasize the syntax and provide single-purpose support for asynchrony [20] and list generators [11]. 
+
+We believe that syntax matters -- a language should provide \emph{uniform} syntactic support that 
+can capture different abstractions, but is \emph{adaptable} and enables appropriate syntax depending
+on the abstraction. This paper shows that F\# computation expressions provide such mechanism.
+
+Although the technical aspects of the feature have been described before\footnote{F\# 3.0 extends the 
+mechanism further to accomodate extensible query syntax. To keep this paper focused, we leave analysis 
+of these extensions to future work.} [17], this paper is novel in that it relates the mechanism to 
+well-known abstract computations. We also present new typing based on those uses.
+
+\subsubsection{Practical examples.} 
+We demonstrate the breath of computations that can be structured using F\# computation expressions.
+The applications include asynchronous workflows and sequences \S\ref{sec:intro-async}, 
+\S\ref{sec:intro-asyncseq}, list comprehensions \S\ref{sec:intro-seq}, monadic parsers \S\ref{sec:intro-parsers}
+and formlets for web programming \S\ref{sec:intro-formlets}.
+
+\vspace{-1em}
+\subsubsection{Abstract computations.} We show that the above examples fit well-known types
+of abstract computations, including additive monads and monad transformers, and we show what 
+syntactic equalities hold as a result \S\ref{sec:laws}.
+
+\vspace{-1em}
+\subsubsection{Syntax and typing.} We revisit the definitions of computation expressions. We provide
+typing rules that capture idiomatic uses \S\ref{sec:semantics-typing}, extend the translation
+to support applicative functors \S\ref{sec:applicative} and discuss the threatment of effects
+\S\ref{sec:delayed} that is needed in impure language.
+
+\vspace{1em}
+\noindent
+We believe that software artifacts in programming language research matter [99], so all examples 
+with implementations can be found and interactively run online: \url{http://tryjoinads.org/computations}. 
+The syntax for applicative functors is a reserch extension; all other examples can be 
+compiled with F\# 2.0.
+
+% ==================================================================================================
+\section{Computation expressions by example}
+\label{sec:intro}
+
+Computation expressions are blocks of code that represent computation with some non-standard 
+aspect such as laziness, asynchronous evaluation, hidden state or other. The code inside the
+block is re-interpreted using \emph{computation builder}. The computation builder is a record 
+of operations that define the computation. It also defines what syntax is available in the block.
+
+Computation expressions mirror the standard F\# syntax (let binding, loops, exception handling),
+but support additonal computational constructs. For example \ident{let!} represents computational 
+(monadic) alternative of let binding.
+
+% --------------------------------------------------------------------------------------------------
+\subsection{Monadic asynchronous workflows}
+\label{sec:intro-async}
+
+\begin{equation*}
+\begin{array}{l}
+\kvd{let}~\ident{getLength}~(url)=\ident{async}~\{\\
+\quad \kvd{let!}~html = \ident{fetchAsync}(url)\\
+\quad \kvd{do!}~\ident{Async}.\ident{Sleep}(1000)\\
+\quad \kvd{return}~html.\ident{Length}\\
+\}
+\end{array}\qquad
+\begin{array}{l}
+\kvd{async}~\ident{Task}\langle\ident{string}\rangle~\ident{GetLength}(\kvd{string}~url)~\{\\
+\quad \kvd{var}~html = \kvd{await}~\ident{FetchAsync}(url);\\
+\quad \kvd{await}~\ident{Task}.\ident{Delay}(1000);\\
+\quad \kvd{return}~html.\ident{Length};\\
+\}
+\end{array}
+\end{equation*}
+
+\begin{equation*}
+\begin{array}{l}
+\ident{async}.\ident{Bind}(\ident{fetchAsync}(url), \kvd{fun}~html\rightarrow\\
+\qquad \ident{async}.\ident{Bind}(\ident{Async}.\ident{Sleep}(1000), \kvd{fun}~()\rightarrow\\
+\qquad\qquad \ident{async}.\ident{Return}(html.\ident{Length})))
+\end{array}
+\end{equation*}
+
+
+\subsubsection{Effects}
+
+\begin{verbatim}
+async { if delay then do! Async.Sleep(1000) 
+        printfn "Starting..."
+        return! asyncFetch url }
+\end{verbatim}
+
+a
+
+\begin{verbatim}
+async.Run(async.Delay(fun () -> 
+  async.Combine(
+    ( if delay then 
+        async.Bind(Async.Sleep(1000), fun () -> async.Zero()) 
+      else async.Zero() ), 
+    async.Delay(fun () -> 
+      printfn "Starting..."
+      async.ReturnFrom(asyncFetch url)) )))
+\end{verbatim}
+imperative monads with sequencing and effects
+
+\subsection{Additive sequence expressions}
+\label{sec:intro-seq}
+
+\subsection{Additivie parser combinators}
+\label{sec:intro-parsers}
+
+\subsection{Layered asynchronous sequences}
+\label{sec:intro-asyncseq}
+
+\subsection{Applicative formlets}
+\label{sec:intro-formlets}
+
+% ==================================================================================================
+\section{Semantics of computation expressions}
+\label{sec:semantics}
+
+Computation expressions are blocks representing non-standard computations – that is, computation 
+that have some additional aspect, such as laziness, asynchronous evaluation, hidden state or other. 
+The code inside the block mirrors the standard F\# syntax, but it is re-interpreted in the context of 
+a non-standard computation. Computation expressions may also include a number of constructs that 
+provide non-standard alternatives of standard constructs. For example, the let! syntax provides 
+non-standard (monadic) version of let binding. 
+
+In this section, we use two examples to show how computation expressions unify single-purpose extensions 
+from other languages. Then we look at the formal definition in the F\# specification [17].
+
+
+\begin{equation*}
+\begin{array}{lcl}
+\kvd{def}~\ident{duplicate}(list): &\hspace{5em}&\ident{duplicate}~list =\\
+\quad \kvd{for}~n~\kvd{in}~list:               &&\quad \kvd{do}~n~\leftarrow~list\\
+\quad\quad \kvd{yield}~n                       &&\quad \quad~\, (\ident{return}~n)~`\ident{mplus}`\\
+\quad\quad \kvd{yield}~n*10                    &&\quad \quad\quad~\, (\ident{return} \$)\\
+\end{array}
+\end{equation*}
+\begin{verbatim}
+duplicate list = 
+  do a <- list
+     (return a) `mplus` (return $ a * 10)
+\end{verbatim}
+
+
+\newpage
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Syntax}
+\label{sec:semantics-syntax}
+
+\begin{equation*}
+\begin{array}{lclcl}
+\expr  &=& \expr ~\{~ \cexpr ~\}                      &\quad&\textnormal{(computation expression)}\\
+\cexpr &=& \kvd{let}~v=\expr~\kvd{in}~\cexpr                &&\textnormal{(binding value)} \\
+       &|& \kvd{let!}~v=\expr~\kvd{in}~\cexpr               &&\textnormal{(binding computation)} \\
+       &\begin{array}{c}|\vspace{1em}\end{array}&\hspace{-0.15em}
+           \begin{array}{l}
+             \kvd{let!}~v_1=\expr_1~\kvd{and}~\ldots\\[-0.2em]
+             \kvd{and}~v_n=\expr_n ~\kvd{in}~\cexpr 
+           \end{array}                                      &&\textnormal{(parallel computation binding)} \\
+       &|& \kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr       &&\textnormal{(for loop computation)} \\
+       &|& \kvd{return}~\expr                               &&\textnormal{(return value)} \\
+       &|& \kvd{return!}~\expr                              &&\textnormal{(return computation)} \\
+       &|& \kvd{yield}~\expr                                &&\textnormal{(yield value)} \\
+       &|& \kvd{yield!}~\expr                               &&\textnormal{(yield computation)} \\
+       &|& \cexpr_1; \cexpr_2                               &&\textnormal{(compose computations)} \\       
+       &|& \expr                                            &&\textnormal{(effectful expression)} \\
+\end{array}
+\end{equation*}
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Typing}
+\label{sec:semantics-typing}
+
+Typing of yield is similar 
+
+\newcommand{\mtyp}[1]{M #1}
+\newcommand{\ntyp}[1]{N #1}
+\newcommand{\ltyp}[1]{L #1}
+\newcommand{\dtyp}[1]{D #1}
+
+\newcommand{\tya}[2]{#1\hspace{-0.15em}:\hspace{-0.15em}#2}
+\newcommand{\cvdash}{\vartriangleright_\sigma}
+\newcommand{\unit}{\ident{unit}}
+
+\begin{equation*}
+\begin{array}{rl}
+\inference 
+  { \Gamma \vdash \expr : \sigma  & \Gamma \cvdash \cexpr : \mtyp{\tau} }
+  { \Gamma \vdash \expr ~\{~ \cexpr ~\} : \ntyp \tau }
+&\quad(\sigma.\plc{run}~:~\mtyp{\tau} \rightarrow \ntyp \tau )  
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \tau_1 &
+    \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \mtyp{\tau_2} }
+  { \Gamma \cvdash \kvd{let}~v=\expr~\kvd{in}~\cexpr : \mtyp{\tau_2}  }
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \mtyp{\tau_1} &
+    \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
+  { \Gamma \cvdash \kvd{let!}~v=\expr~\kvd{in}~\cexpr : \ntyp{\tau_2}  }
+&\quad(\sigma.\plc{bind}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \mtyp{\tau_1} &
+    \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
+  { \Gamma \cvdash \kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr : \ntyp{\tau_2}  }
+&\quad(\sigma.\plc{for}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \tau }
+  { \Gamma \cvdash \kvd{return}~\expr : \mtyp{\tau}  }
+&\quad(\sigma.\plc{return}~:~\alpha \rightarrow \mtyp{\alpha})
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \mtyp \tau }
+  { \Gamma \cvdash \kvd{return!}~\expr : \ntyp{\tau}  }
+&\quad(\sigma.\plc{returnFrom}~:~\mtyp{\alpha} \rightarrow \ntyp{\alpha})  
+\\[1.5em]
+\inference
+  { \Gamma \cvdash \cexpr_1 : \mtyp{\tau_1}  &  \Gamma \cvdash \cexpr_2 : \ntyp{\tau_2}}
+  { \Gamma \cvdash \cexpr_1; \cexpr_2 : \ltyp{\tau_1}  }
+&\quad\left(\begin{array}{lll}
+\plc{delay}   &:& (\unit \rightarrow \ntyp{\alpha}) \rightarrow \dtyp{\alpha} \\
+\plc{combine} &:& \mtyp{\tau_1} \rightarrow \dtyp{\tau_2} \rightarrow \ltyp{\tau_2}
+\end{array}\right)
+\\[1.5em]
+\inference
+  { \Gamma \vdash \expr : \unit }
+  { \Gamma \cvdash \expr : \mtyp{\tau}  }
+&\quad(\sigma.\plc{zero}~:~\unit \rightarrow \mtyp{\tau})
+\end{array}
+\end{equation*}
+
+When we write $\alpha$ and $\beta$, we assume universal quantification. When we write $\tau$, we 
+mean any instantiation (but the operation may not be universally qualified).
+
+For example, \plc{zero} may have a type \mtyp{\unit} or $\mtyp{\alpha}$.
+
+Typing of \ident{yield} and \ident{yield!} is similar to the typing of \ident{return} and \ident{return!},
+so we omit them.
+
+Zero may 
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Translation}
+\label{sec:semantics-transl}
+
+% ==================================================================================================
+
+\section{Delayed computations}
+\label{sec:delayed}
+
+% ==================================================================================================
+
+\section{Abstract computation types}
+\label{sec:laws}
+
+% ==================================================================================================
+
+\section{Applicative computations}
+\label{sec:applicative}
+
+% ==================================================================================================
+
+\section{Conclusions}
+\label{sec:conclusions}
+
+% ==================================================================================================
+
+\section*{Acknowledgements}
+
+
+
+\bibliographystyle{abbrv}
+\bibliography{computation-zoo}
+
+\appendix
+
+\section{Bonus}
+
+
+
+
+\end{document}
+
+
+
+
+
+
+
+
+
+
+
+
