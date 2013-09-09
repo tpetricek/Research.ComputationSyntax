@@ -32,7 +32,25 @@
 
 \newcommand{\cexpr}{\plc{cexpr}}
 \newcommand{\expr}{\plc{expr}}
+\newcommand{\binds}{\plc{binds}}
 \newcommand{\pat}{\plc{pat}}
+
+% Computation types
+\newcommand{\mtyp}[1]{M #1}
+\newcommand{\ntyp}[1]{N #1}
+\newcommand{\ltyp}[1]{L #1}
+\newcommand{\dtyp}[1]{D #1}
+
+% Typing rules etc.
+\newcommand{\tya}[2]{#1\hspace{-0.15em}:\hspace{-0.15em}#2}
+\newcommand{\cvdash}{\Vdash_\sigma}
+\newcommand{\bvdash}{\vartriangleright_\sigma}
+\newcommand{\unit}{\ident{unit}}
+
+% Translation rules
+\newcommand{\tsl}[1]{|[ #1 |]_m}
+\newcommand{\tsb}[1]{\langle\hspace{-0.25em}\langle #1 \rangle\hspace{-0.25em}\rangle_m}
+\newcommand{\tsv}[1]{\langle #1 \rangle}
 
 % ==================================================================================================
 
@@ -90,7 +108,7 @@ syntactic equalities hold as a result \S\ref{sec:laws}.
 \subsubsection{Syntax and typing.} We revisit the definitions of computation expressions. We provide
 typing rules that capture idiomatic uses \S\ref{sec:semantics-typing}, extend the translation
 to support applicative functors \S\ref{sec:applicative} and discuss the threatment of effects
-\S\ref{sec:delayed} that is needed in impure language.
+\S\ref{sec:semantics-delayed} that is needed in impure language.
 
 \vspace{1em}
 \noindent
@@ -170,7 +188,8 @@ translated as follows:
 The two operations form a monad and have the standard types. Assuming $A\tau$ is a type of asynchronous 
 computations, the $\emph{Return}$ has a type $\alpha \rightarrow A\alpha$ and the required type of
 $\emph{Bind}$ is $A\alpha \rightarrow (\alpha \rightarrow A\beta) \rightarrow A\beta$ (as a convention,
-we use $\alpha, \beta$ for universally qualified type variables and $\tau$ as for concrete types).
+we use $\alpha, \beta$ for universally qualified type variables and $\tau$ as for concrete types)
+\footnote{For the purpose of this paper, we write type application using a light notation $T\tau$. }.
 
 \vspace{-1em}
 \subsubsection{Sequencing and effects.} Primitive effectful expressions in F\# return \ident{unit}.
@@ -238,8 +257,8 @@ asynchronous workflows. The difference is that we can now use \ident{return} and
 repeatedly. The following parsers recognize one or more and zero or more repetitions of a given
 predicate, respectively:
 %
-\begin{equation*}
-\begin{array}{l}
+\vspace{-0.5em}\begin{equation*}
+\hspace{-2em} \begin{array}{l}
 \kvd{let rec}~\ident{zeroOrMore}~p = \ident{parse}~\{\\
 \quad \kvd{return!}~\ident{oneOrMore}~p\\
 \quad \kvd{return}~[\,] ~\}
@@ -251,6 +270,7 @@ predicate, respectively:
 \quad \kvd{let!}~xs = \ident{zeroOrMore}~p\\
 \quad \kvd{return}~x::xs ~\}
 \end{array}
+\vspace{-0.5em}
 \end{equation*}
 %
 The \ident{oneOrMore} function uses just the monadic interface and so its translation uses 
@@ -429,6 +449,7 @@ In other words, it is not possible to choose which computation to run (using \id
 \ident{do!}) based on values obtained in previous \ident{let!} bindings. The following example
 demonstrates this using a web form abstraction called formlets [99]:
 %
+\vspace{-0.3em}
 \begin{equation*}
 \begin{array}{l}
 \kvd{let}~\ident{userFormlet} = \ident{formlet}~\{\\
@@ -436,6 +457,7 @@ demonstrates this using a web form abstraction called formlets [99]:
 \quad \kvd{and}~gender = \ident{Formlet}.\ident{dropDown}~[\texttt{"Male"}; \texttt{"Female"}] \\
 \quad \kvd{return}~name + \texttt{" "} + gender ~\}
 \end{array}
+\vspace{-0.3em}
 \end{equation*}
 %
 The computation describes two aspects -- the rendering and the processing of entered values.
@@ -448,11 +470,12 @@ uses parallel binding (\kvd{let!}\ldots\kvd{and}\ldots), which binds a fixed num
 computations. The rest of the computation cannot contain other (applicative) bindings.
 
 There are two equivalent ways of defining applicative functors. We use the less common style
-which uses two operations. \emph{Merge} of type $F\alpha \rightarrow F\beta \rightarrow F(\alpha,\beta)$
+which uses two operations. \emph{Merge} of type $F\alpha \rightarrow F\beta \rightarrow F(\alpha \times \beta)$
 represents composition of structure (without any knowledge of specific values) and \emph{Map} of 
 type $F\alpha \rightarrow (\alpha \rightarrow \beta) \rightarrow F\beta$ transforms the (pure) value.
 The computation expression from the previous example is translated as follows:
 %
+\vspace{-0.3em}
 \begin{equation*}
 \begin{array}{l}
 \ident{formlet}.\ident{Map} \\
@@ -460,6 +483,7 @@ The computation expression from the previous example is translated as follows:
   \ident{Formlet}.\ident{dropDown}~[\texttt{"Male"}; \texttt{"Female"}]),  \\
 \quad~~\kvd{fun}~(name, gender) \rightarrow name + \texttt{" "} + gender~)
 \end{array}
+\vspace{-0.3em}
 \end{equation*}
 %
 The parallel binding is turned into an expression that combines all bindings using the 
@@ -475,38 +499,35 @@ find that computation expressions provide a useful alternative for more complex 
 with the impure nature of F\#.
 
 % ==================================================================================================
+
 \section{Semantics of computation expressions}
 \label{sec:semantics}
 
-Computation expressions are blocks representing non-standard computations – that is, computation 
-that have some additional aspect, such as laziness, asynchronous evaluation, hidden state or other. 
-The code inside the block mirrors the standard F\# syntax, but it is re-interpreted in the context of 
-a non-standard computation. Computation expressions may also include a number of constructs that 
-provide non-standard alternatives of standard constructs. For example, the let! syntax provides 
-non-standard (monadic) version of let binding. 
+The F\# language specification [17] documents computation expressions as a purely syntactic 
+mechanism. They are desugared before type-checking, which is then performed on the translated code 
+using standard F\# typing rules. Similarly to Haskell's rebindable syntax [99], this provides more
+flexibility and allows the users to invent previously unforseen abstractions.
 
-In this section, we use two examples to show how computation expressions unify single-purpose extensions 
-from other languages. Then we look at the formal definition in the F\# specification [17].
-
-
-
-\newpage
+In this paper, we look at computation expressions from a different perspective. We relate them to 
+standard abstract computation types. In \S\ref{sec:semantics-typing}, we present a new typing that 
+captures such common uses and would make the system more robust by supporting better error messages 
+and disallowing non-standard uses.
 
 % --------------------------------------------------------------------------------------------------
 
 \subsection{Syntax}
 \label{sec:semantics-syntax}
 
+The full syntax of computation expressions is given in the language specification, but the following
+lists all important constructs that we consider in this paper:
+%
 \begin{equation*}
 \begin{array}{lclcl}
-\expr  &=& \expr ~\{~ \cexpr ~\}                      &\quad&\textnormal{(computation expression)}\\
+\expr  &=& \expr ~\{~ \cexpr ~\}                       &\quad&\textnormal{(computation expression)}\\
+\binds &=& v=\expr                                          &&\textnormal{(single binding)}\\
+       &|& v=\expr ~\kvd{and}~\binds                        &&\textnormal{(parallel binding)}\\
 \cexpr &=& \kvd{let}~v=\expr~\kvd{in}~\cexpr                &&\textnormal{(binding value)} \\
-       &|& \kvd{let!}~v=\expr~\kvd{in}~\cexpr               &&\textnormal{(binding computation)} \\
-       &\begin{array}{c}|\vspace{1em}\end{array}&\hspace{-0.15em}
-           \begin{array}{l}
-             \kvd{let!}~v_1=\expr_1~\kvd{and}~\ldots\\[-0.2em]
-             \kvd{and}~v_n=\expr_n ~\kvd{in}~\cexpr 
-           \end{array}                                      &&\textnormal{(parallel computation binding)} \\
+       &|& \kvd{let!}~\binds~\kvd{in}~\cexpr                &&\textnormal{(binding computation)} \\
        &|& \kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr       &&\textnormal{(for loop computation)} \\
        &|& \kvd{return}~\expr                               &&\textnormal{(return value)} \\
        &|& \kvd{return!}~\expr                              &&\textnormal{(return computation)} \\
@@ -516,99 +537,219 @@ from other languages. Then we look at the formal definition in the F\# specifica
        &|& \expr                                            &&\textnormal{(effectful expression)} \\
 \end{array}
 \end{equation*}
+%
+We do not include \ident{do!} which can be easily expressed in terms of the \ident{let!} construct. 
+To accommodate the applicative syntax, we use a syntactic category \binds\; to express one or more
+variable bindings. 
+
+For space reasons, we also omit imperative \ident{while} and exception handling 
+constructs. Both of these are an important part of computation expressions. The design principle is 
+that the user should be able to wrap any valid F\# code in a computation block and augment it with 
+non-standard computational aspect, while preserving the semantics (including exception handling).
 
 % --------------------------------------------------------------------------------------------------
 
-\subsection{Typing}
-\label{sec:semantics-typing}
-
-Typing of yield is similar 
-
-\newcommand{\mtyp}[1]{M #1}
-\newcommand{\ntyp}[1]{N #1}
-\newcommand{\ltyp}[1]{L #1}
-\newcommand{\dtyp}[1]{D #1}
-
-\newcommand{\tya}[2]{#1\hspace{-0.15em}:\hspace{-0.15em}#2}
-\newcommand{\cvdash}{\vartriangleright_\sigma}
-\newcommand{\unit}{\ident{unit}}
-
-\begin{equation*}
+\begin{figure}[t!]
+\begin{equation*}\hspace{-2em}
 \begin{array}{rl}
-\inference 
+\multicolumn{2}{c}{
+  \boxed{\Gamma \vdash \expr :\tau}\quad\textnormal{and}\quad
+    \boxed{\Gamma \bvdash \binds : \mtyp\Sigma}
+}\\[1.5em]
+%
+(\textnormal{run})~
+\inference
   { \Gamma \vdash \expr : \sigma  & \Gamma \cvdash \cexpr : \mtyp{\tau} }
   { \Gamma \vdash \expr ~\{~ \cexpr ~\} : \ntyp \tau }
-&\quad(\sigma.\plc{Run}~:~\mtyp{\alpha} \rightarrow \ntyp \alpha )  
+&\quad\begin{array}{l}
+(\forall \alpha: \sigma.\plc{Run}~:~\dtyp{\alpha} \rightarrow \ntyp \alpha \\
+\;\,\forall\alpha: \sigma.\plc{Delay} : (\unit \rightarrow \mtyp{\alpha}) \rightarrow \dtyp{\alpha} )
+\end{array}
 \\[1.5em]
+(\textnormal{bind-one})~
+\inference 
+  { \Gamma \vdash \expr : \mtyp{\tau} }
+  { \Gamma \bvdash v=\expr : \mtyp{(\tya{v}{\tau})} }
+\\[1.5em]
+(\textnormal{bind-par})~
+\inference 
+  { \Gamma \vdash \expr : \tau & \Gamma \bvdash \binds : \mtyp{\Sigma} }
+  { \Gamma \bvdash v=\expr~\kvd{and}~\binds : \mtyp{(\Sigma, \tya{v}{\tau})}  }
+&\quad\begin{array}{l}
+(\forall\alpha,\beta: \sigma.\plc{Merge}~:\\
+\quad \mtyp{\alpha} \rightarrow \mtyp{\beta} \rightarrow \mtyp{(\alpha \times \beta)} )  
+\end{array}
+\\[1.5em]
+%
+\multicolumn{2}{c}{
+  \boxed{\Gamma \cvdash \cexpr : \mtyp\tau}
+}\\[1.5em]
+%
+(\textnormal{let})~
 \inference
   { \Gamma \vdash \expr : \tau_1 &
     \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \mtyp{\tau_2} }
   { \Gamma \cvdash \kvd{let}~v=\expr~\kvd{in}~\cexpr : \mtyp{\tau_2}  }
 \\[1.5em]
+(\textnormal{bind})~
 \inference
-  { \Gamma \vdash \expr : \mtyp{\tau_1} &
-    \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
-  { \Gamma \cvdash \kvd{let!}~v=\expr~\kvd{in}~\cexpr : \ntyp{\tau_2}  }
-&\quad(\sigma.\plc{Bind}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+  { \Gamma \bvdash \binds : \mtyp\Sigma &
+    \Gamma, \Sigma \cvdash \cexpr : \ntyp{\tau} }
+  { \Gamma \cvdash \kvd{let!}~\binds~\kvd{in}~\cexpr : \ntyp{\tau}  }
+&\quad\begin{array}{l}
+(\forall\alpha,\beta: \sigma.\plc{Bind}~:\\
+\quad \mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+\end{array}
 \\[1.5em]
+(\textnormal{map})~
+\inference
+  { \Gamma \bvdash \binds : \mtyp\Sigma &
+    \Gamma, \Sigma \vdash \expr : \tau }
+  { \Gamma \cvdash \kvd{let!}~\binds~\kvd{in}~\kvd{return}~\expr : \ntyp{\tau}  }
+&\quad\begin{array}{l}
+(\forall\alpha,\beta: \sigma.\plc{Map}~:\\
+\quad \mtyp{\alpha} \rightarrow (\alpha \rightarrow \beta) \rightarrow \ntyp{\beta} )  
+\end{array}
+\\[1.5em]
+(\textnormal{for})~
 \inference
   { \Gamma \vdash \expr : \mtyp{\tau_1} &
     \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
   { \Gamma \cvdash \kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr : \ntyp{\tau_2}  }
-&\quad(\sigma.\plc{For}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+&\quad\begin{array}{l}
+(\forall\alpha,\beta: \sigma.\plc{For}~:\\
+\quad \mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+\end{array}
 \\[1.5em]
+(\textnormal{return-val})~
 \inference
   { \Gamma \vdash \expr : \tau }
   { \Gamma \cvdash \kvd{return}~\expr : \mtyp{\tau}  }
-&\quad(\sigma.\plc{Return}~:~\alpha \rightarrow \mtyp{\alpha})
+&\quad(\forall\alpha: \sigma.\plc{Return}~:~\alpha \rightarrow \mtyp{\alpha})
 \\[1.5em]
+(\textnormal{return-comp})~
 \inference
   { \Gamma \vdash \expr : \mtyp \tau }
   { \Gamma \cvdash \kvd{return!}~\expr : \ntyp{\tau}  }
-&\quad(\sigma.\plc{ReturnFrom}~:~\mtyp{\alpha} \rightarrow \ntyp{\alpha})  
+&\quad(\forall\alpha: \sigma.\plc{ReturnFrom}~:~\mtyp{\alpha} \rightarrow \ntyp{\alpha})  
 \\[1.5em]
+(\textnormal{seq})~
 \inference
   { \Gamma \cvdash \cexpr_1 : \mtyp{\tau_1}  &  \Gamma \cvdash \cexpr_2 : \ntyp{\tau_2}}
   { \Gamma \cvdash \cexpr_1; \cexpr_2 : \ltyp{\tau_1}  }
-&\quad\left(\begin{array}{lll}
-\sigma.\plc{Delay}   &:& (\unit \rightarrow \ntyp{\alpha}) \rightarrow \dtyp{\alpha} \\
-\sigma.\plc{Combine} &:& \mtyp{\tau_1} \rightarrow \dtyp{\tau_2} \rightarrow \ltyp{\tau_2}
-\end{array}\right)
+&\quad\begin{array}{l}
+(\forall\alpha: \sigma.\plc{Delay} ~:~ (\unit \rightarrow \ntyp{\alpha}) \rightarrow \dtyp{\alpha} \\
+\;\,\forall\alpha: \sigma.\plc{Combine} : \mtyp{\tau_1} \rightarrow \dtyp{\alpha} \rightarrow \ltyp{\alpha} )
+\end{array}
 \\[1.5em]
+(\textnormal{zero})~
 \inference
   { \Gamma \vdash \expr : \unit }
   { \Gamma \cvdash \expr : \mtyp{\tau}  }
 &\quad(\sigma.\plc{Zero}~:~\unit \rightarrow \mtyp{\tau})
 \end{array}
 \end{equation*}
+\vspace{-1em}
+\caption{Typing rules for computation expressions}
+\label{fig:typing}
+\vspace{-1em}
+\end{figure}
 
-When we write $\alpha$ and $\beta$, we assume universal quantification. When we write $\tau$, we 
-mean any instantiation (but the operation may not be universally qualified).
+% --------------------------------------------------------------------------------------------------
 
-For example, \plc{zero} may have a type \mtyp{\unit} or $\mtyp{\alpha}$.
+\subsection{Typing}
+\label{sec:semantics-typing}
 
-Typing of \ident{yield} and \ident{yield!} is similar to the typing of \ident{return} and \ident{return!},
-so we omit them.
+The typing rules in Figure~\ref{fig:typing} are written using three judgments. Standard F\# 
+expressions are typed using $\Gamma \vdash \expr : \tau$. Computation expressions always return
+computation of type $\mtyp{\tau}$ and are typed using $\Gamma \cvdash \cexpr : \mtyp{\tau}$.
+Finally, we use a helper judgement $\Gamma \bvdash \binds : \mtyp{\Sigma}$ to check bindings
+of multiple computations. The judgement produces a variable context with newly bound variables, 
+wrapped in the type $M$ of the bound computations.
 
-Zero may 
+The latter two are parameterized by the type of the computation expression builder (such as
+\ident{seq} or \ident{async}). The operations supported by the builder determine which syntactic
+constructs are enabled. Typing rules that require a certain operation have a side-condition
+on the right, which specifies the requirement.
+
+In most of the side-conditions, the functions are universally quantified over the type of values
+(written as $\alpha, \beta$). This captures the fact that computation should not restrict the 
+values that users can work with. However, this is not the case in the rules (\emph{seq}) and 
+(\emph{zero}). Here, we can only require that a specific instantiation is available -- the reason 
+is that these operations may be used in two different ways. As discussed in \S\ref{sec:intro-async}, 
+for monads the result of \emph{Zero} and the first argument of \emph{Combine} are restricted to
+$M\,\ident{unit}$. They can be universally quantified only if the computation is monoidal 
+\S\ref{sec:intro-seq-parsers}.
+
+Another notable aspect of the typing is that a single computation expression may use multiple
+computation types (written $M, N, L$ and $D$). In \emph{Bind} and \emph{For}, the type of bound
+argument is $M$, but the resulting computation is $N$ (we require that bind returns the same
+type of computation as the one produced by the function). This corresponds to the typing used
+by computations arising from monad transformers \S\ref{sec:intro-asyncseq}. Although combining
+multiple computation types is not as frequent, computations often have a delayed version which
+we write as $D$. This is an important consideration for impure langauges such as F\# 
+\S\ref{sec:semantics-delayed}.
+
+Finally, we omitted typing for \ident{yield} and \ident{yield!} because it is similar to the 
+typing of \ident{return} and \ident{return!} (using \emph{Yield} and \emph{YieldFrom} operations,
+respectively).
+
+% --------------------------------------------------------------------------------------------------
+
+\begin{figure}[t]
+\begin{equation*}
+\hspace{-1em}\begin{array}{rcl}
+\expr ~\{~ \cexpr ~\} &~=~& \kvd{let}~m = \expr ~\kvd{in}~m.\ident{Run}(m.\ident{Delay}(\kvd{fun}~() \rightarrow \tsl{\cexpr}))
+\\[0.7em]
+\tsl{\kvd{let}~v=\expr~\kvd{in}~\cexpr}          &=& \kvd{let}~v=\expr~\kvd{in}~\tsl{\cexpr} \\[0.1em]
+\tsl{\kvd{let!}~\binds~\kvd{in}~\cexpr}          &=& m.\ident{Bind}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \tsl{\cexpr}) \\[0.1em]
+\tsl{\kvd{let!}~\binds~\kvd{in}~\kvd{return}\expr}          &=&
+   m.\ident{Map}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \expr) \\[0.1em]
+\tsl{\kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr} &=& m.\ident{For}(\expr,\kvd{fun}~()\rightarrow \tsl{\cexpr}) \\[0.1em]
+%
+\tsl{\kvd{return}~\expr}   &=& m.\ident{Return}(\expr) \\[0.1em]
+\tsl{\kvd{return!}~\expr}  &=& m.\ident{ReturnFrom}(\expr) \\[0.1em]
+\tsl{\cexpr_1; \cexpr_2}   &=& m.\ident{Combine}(\tsl{\cexpr_1}, \;m.\ident{Delay}(\kvd{fun}~() \rightarrow \tsl{\cexpr_2} )) \\[0.1em]
+\tsl{\expr}                &=& \expr; ~m.\ident{Zero}()
+\\[0.7em]
+\tsb{v=\expr} &=& \expr \\[0.1em]
+\tsb{v=\expr ~\kvd{and}~\binds} &=& m.\ident{Merge}(\expr, \tsl{\binds})
+\\[0.7em]
+\tsv{v=\expr} &=& v \\[0.1em]
+\tsv{v=\expr ~\kvd{and}~\binds} &=& v, \tsv{\binds} 
+\end{array}
+\end{equation*}
+\vspace{-1em}
+\caption{Translation rules for computation expressions}
+\label{fig:translation}
+\vspace{-1em}
+\end{figure}
 
 % --------------------------------------------------------------------------------------------------
 
 \subsection{Translation}
 \label{sec:semantics-transl}
 
+Non-deterministic \ident{let!} but that's ok - monad laws
+
+`Default Run and default Delay
+
+
 % ==================================================================================================
 
-\section{Delayed computations}
-\label{sec:delayed}
-
+\newpage
+\subsection{Delayed computations}
+\label{sec:semantics-delayed}
+~
 % ==================================================================================================
 
 \section{Abstract computation types}
 \label{sec:laws}
+~
 
 \subsection{Monad transformers}
 \label{sec:laws-transf}
+~
 
 % ==================================================================================================
 
