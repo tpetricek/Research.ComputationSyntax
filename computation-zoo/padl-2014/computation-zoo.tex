@@ -192,7 +192,12 @@ For monads, it is possible to translate the snippet above using just \emph{Bind}
 but this approach does not work for other computations \S\ref{sec:intro-seq-parsers}. For this reason, 
 F\# requires additional operations -- \emph{Zero} represents monadic unit value, \emph{Combine} 
 corresponds to the ``;'' operator and \emph{Delay} takes an effectful computation and embeds the 
-effects in a (delayed) computation:
+effects in a (delayed) computation. 
+
+Finally, the \ident{return!} keyword is used to return the result of a computation. 
+It requires an operation \emph{ReturnFrom} of type $A\alpha \rightarrow A\alpha$. This is typically
+implemented as an identity function -- its main purpose is to enable the \ident{return!} keyword in 
+the syntax, as this may not be alway desirable \S\ref{sec:intro-seq-parsers}.
 %
 \begin{equation*}
 \begin{array}{l}
@@ -233,7 +238,6 @@ asynchronous workflows. The difference is that we can now use \ident{return} and
 repeatedly. The following parsers recognize one or more and zero or more repetitions of a given
 predicate, respectively:
 %
-\vspace{-0.5em}
 \begin{equation*}
 \begin{array}{l}
 \kvd{let rec}~\ident{zeroOrMore}~p = \ident{parse}~\{\\
@@ -247,7 +251,6 @@ predicate, respectively:
 \quad \kvd{let!}~xs = \ident{zeroOrMore}~p\\
 \quad \kvd{return}~x::xs ~\}
 \end{array}
-\vspace{-0.5em}
 \end{equation*}
 %
 The \ident{oneOrMore} function uses just the monadic interface and so its translation uses 
@@ -323,11 +326,11 @@ type of monadic unit $\alpha \rightarrow [\alpha]$. We could have provided the \
 and \emph{Return} operations in the \ident{seq} builder instead, but this leads to a less intuitive
 syntax that requires users to write \ident{let!} for iteration and \ident{return} for yielding.
 
-As the comparison with Python shows, the flexibility of the syntax makes it possible to write 
-computation expressions that are close to built-in language features. The author of a concrete
-computation (\ident{parse}, \ident{seq}, \ident{async}, \ldots) decides what syntax is appropriate. We
-can only provide anecdotal recommendation -- for computations where the \emph{monoidal} interface 
-is more important, the \ident{for}/\ident{yield} notation fits better, while for computations where
+As the Python comparison shows, the flexibility of computation expressions means that they
+are often close to built-in language features. The author of a concrete computation (\ident{parse}, 
+\ident{seq}, \ident{async}, \ldots) decides what syntax is appropriate. We can only provide 
+anecdotal recommendation -- for computations where the \emph{monoidal} interface is more important, 
+the \ident{for}/\ident{yield} notation fits better, while for computations where
 the \emph{monadic} interface dominates we prefer \ident{let!} and \ident{return}.
 
 % --------------------------------------------------------------------------------------------------
@@ -344,7 +347,7 @@ Such computation is captured by \emph{asynchronous sequences} [14].
 
 Assuming $\ident{Async}\,\tau$ is the type of asynchronous workflows, the composed
 computation can be expressed as follows (inspired by the list transformer [99]):
-%
+
 \begin{equation*}
 \begin{array}{lcl}
 \kvd{type}~\ident{AsyncSeqInner}\,\tau &~=~& \ident{AsyncNil} ~|~
@@ -416,8 +419,16 @@ computation expression syntax.
 \subsection{Applicative formlets}
 \label{sec:intro-formlets}
 
-Our last example shall be...
+Our last example uses a computation based on \emph{applicative functors} [2], which is a weaker
+(and thus more common) abstraction than monads. The difference between applicative and monadic
+computations is that monadic computation can perform different effects depending on values
+obtained earlier during the computation. On the other hand, the structure of effects of applicative
+computation is fully determined by its structure. 
 
+In other words, it is not possible to choose which computation to run (using \ident{let!} or 
+\ident{do!}) based on values obtained in previous \ident{let!} bindings. The following example
+demonstrates this using a web form abstraction called formlets [99]:
+%
 \begin{equation*}
 \begin{array}{l}
 \kvd{let}~\ident{userFormlet} = \ident{formlet}~\{\\
@@ -426,9 +437,22 @@ Our last example shall be...
 \quad \kvd{return}~name + \texttt{" "} + gender ~\}
 \end{array}
 \end{equation*}
+%
+The computation describes two aspects -- the rendering and the processing of entered values.
+The rendering phase uses the fixed structure to produce HTML with text-box and drop-down elements.
+In the processing phase, the values of \emph{name} and \emph{gender} are available and are used to
+calculate the result of the form.
 
-translates to
+The structure of the form needs to be known without having access to specific values. The syntax
+uses parallel binding (\kvd{let!}\ldots\kvd{and}\ldots), which binds a fixed number of independent
+computations. The rest of the computation cannot contain other (applicative) bindings.
 
+There are two equivalent ways of defining applicative functors. We use the less common style
+which uses two operations. \emph{Merge} of type $F\alpha \rightarrow F\beta \rightarrow F(\alpha,\beta)$
+represents composition of structure (without any knowledge of specific values) and \emph{Map} of 
+type $F\alpha \rightarrow (\alpha \rightarrow \beta) \rightarrow F\beta$ transforms the (pure) value.
+The computation expression from the previous example is translated as follows:
+%
 \begin{equation*}
 \begin{array}{l}
 \ident{formlet}.\ident{Map} \\
@@ -437,6 +461,19 @@ translates to
 \quad~~\kvd{fun}~(name, gender) \rightarrow name + \texttt{" "} + gender~)
 \end{array}
 \end{equation*}
+%
+The parallel binding is turned into an expression that combines all bindings using the 
+\emph{Merge} operation. This part of the computation defines the structure and formlets use it
+for rendering HTML. The rest of the computation is turned into a pure function passed to \emph{Map}.
+Note that the translation allows uses beyond applicative functors. The \ident{let!}\ldots\ident{and}\ldots
+syntax can be used with monads to write zip comprehensions [99], which are useful for
+parsing, parallelism and more [99].
+
+Applicative functors were first introduced to support \emph{applicative} programming style where
+monads are not needed. The \emph{idiom brackets} notation [99] fits that purpose better. We
+find that computation expressions provide a useful alternative for more complex code and fit better 
+with the impure nature of F\#.
+
 % ==================================================================================================
 \section{Semantics of computation expressions}
 \label{sec:semantics}
@@ -454,9 +491,6 @@ from other languages. Then we look at the formal definition in the F\# specifica
 
 
 \newpage
-To download a web page asynchronously and immediately returnthe result, we can write 
-$\ident{return!}~\ident{fetchAsync}(url)$. The translation of the \ident{return!} keyword requires
-the \emph{ReturnFrom} operation of type $A\alpha \rightarrow A\alpha$. The operation
 
 % --------------------------------------------------------------------------------------------------
 
