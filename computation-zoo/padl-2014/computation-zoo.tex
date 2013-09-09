@@ -78,7 +78,7 @@ well-known abstract computations. We also present new typing based on those uses
 \subsubsection{Practical examples.} 
 We demonstrate the breath of computations that can be structured using F\# computation expressions.
 The applications include asynchronous workflows and sequences \S\ref{sec:intro-async}, 
-\S\ref{sec:intro-asyncseq}, list comprehensions \S\ref{sec:intro-seq}, monadic parsers \S\ref{sec:intro-parsers}
+\S\ref{sec:intro-asyncseq}, list comprehensions and monadic parsers \S\ref{sec:intro-seq-parsers}
 and formlets for web programming \S\ref{sec:intro-formlets}.
 
 \vspace{-1em}
@@ -100,27 +100,40 @@ The syntax for applicative functors is a reserch extension; all other examples c
 compiled with F\# 2.0.
 
 % ==================================================================================================
+
 \section{Computation expressions by example}
 \label{sec:intro}
 
 Computation expressions are blocks of code that represent computation with some non-standard 
 aspect such as laziness, asynchronous evaluation, hidden state or other. The code inside the
-block is re-interpreted using \emph{computation builder}. The computation builder is a record 
-of operations that define the computation. It also defines what syntax is available in the block.
+block is re-interpreted using \emph{computation builder}, which is a record of operations that 
+define the computation. It also defines what syntax is available in the block\footnote{The focus 
+of this paper is \emph{not} on computation expressions, but on their relation to well-known 
+abstractions. Readers unfamiliar with F\# may find extended explanation of the mechanism 
+in previous publications [99,9].}.
 
 Computation expressions mirror the standard F\# syntax (let binding, loops, exception handling),
 but support additonal computational constructs. For example \ident{let!} represents computational 
 (monadic) alternative of let binding.
 
+We first introduce the syntax and mapping to the underlying operations, but both are made precise 
+later \S\ref{sec:semantics}. To show the breadth of applications, we look at five examples arising 
+from different abstract computations.
+
 % --------------------------------------------------------------------------------------------------
+
 \subsection{Monadic asynchronous workflows}
 \label{sec:intro-async}
 
+Asynchronous workflows [99] allow writing non-blocking I/O using a mechanism based on the 
+\emph{continuation monad} (with error handling etc.) The following example shows F\# version
+with an equivalent C\# code using single-purpose feature:
+%
 \begin{equation*}
 \begin{array}{l}
-\kvd{let}~\ident{getLength}~(url)=\ident{async}~\{\\
-\quad \kvd{let!}~html = \ident{fetchAsync}(url)\\
-\quad \kvd{do!}~\ident{Async}.\ident{Sleep}(1000)\\
+\kvd{let}~\ident{getLength}~url=\ident{async}~\{\\
+\quad \kvd{let!}~html = \ident{fetchAsync}~url\\
+\quad \kvd{do!}~\ident{Async}.\ident{Sleep}~1000\\
 \quad \kvd{return}~html.\ident{Length}\\
 \}
 \end{array}\qquad
@@ -133,49 +146,297 @@ but support additonal computational constructs. For example \ident{let!} represe
 \end{array}
 \end{equation*}
 
+Both functions return a computation that expects a \emph{continuation} and then downloads a given 
+URL, waits one second and passes content length to the continuation. The C\# version uses the built-in
+$\ident{await}$ keyword to represent non-blocking waiting. In F\#, the computation is enclosed
+in the $\ident{async}~\{ \ldots \}$ block, where \ident{async} is an identifier that refers to
+the computation builder. 
+
+Depending on the operations provided by the builder, different pre-defined keywords are allowed
+in the computation block. The previous snippet uses \ident{let!} which represents (monadic) 
+composition and requires the \emph{Bind} operation. This operation also enables the \ident{do!} 
+keyword which is equivalent to using \ident{let!} on an unit-returning computation. Finally, the 
+\ident{return} keyword is mapped to the \emph{Return} operation, so the previous F\# snippet is 
+translated as follows:
+%
 \begin{equation*}
 \begin{array}{l}
 \ident{async}.\ident{Bind}(\ident{fetchAsync}(url), \kvd{fun}~html\rightarrow\\
-\qquad \ident{async}.\ident{Bind}(\ident{Async}.\ident{Sleep}(1000), \kvd{fun}~()\rightarrow\\
+\qquad \ident{async}.\ident{Bind}(\ident{Async}.\ident{Sleep}~1000, \kvd{fun}~()\rightarrow\\
 \qquad\qquad \ident{async}.\ident{Return}(html.\ident{Length})))
 \end{array}
 \end{equation*}
+%
+The two operations form a monad and have the standard types. Assuming $A\tau$ is a type of asynchronous 
+computations, the $\emph{Return}$ has a type $\alpha \rightarrow A\alpha$ and the required type of
+$\emph{Bind}$ is $A\alpha \rightarrow (\alpha \rightarrow A\beta) \rightarrow A\beta$ (as a convention,
+we use $\alpha, \beta$ for universally qualified type variables and $\tau$ as for concrete types).
 
+\vspace{-1em}
+\subsubsection{Sequencing and effects.} Primitive effectful expressions in F\# return \ident{unit}.
+Assuming $e_1$ returns \ident{unit}, we can sequence expression using $e_1; e_2$ and we can also
+write effectful \ident{if} condition without the \ident{else} clause (which implicitly returns
+the unit value in the \ident{false} case). Both of these constructs have their equivalent 
+in the computation expression syntax:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{async}~\{~ \kvd{if}~delay~\ident{then}~\kvd{do!}~\ident{Async}.\ident{Sleep}(1000)\\
+\hspace{3.4em}     \ident{printfn}~ \texttt{"Starting..."}\\
+\hspace{3.4em}     \kvd{return!}~ \ident{asyncFetch}(url) ~\}
+\end{array}
+\end{equation*}
+%
+If $delay$ is true, the workflow waits one second before downloading page and returning it.
+For monads, it is possible to translate the snippet above using just \emph{Bind} and \emph{Return}, 
+but this approach does not work for other computations \S\ref{sec:intro-seq-parsers}. For this reason, 
+F\# requires additional operations -- \emph{Zero} represents monadic unit value, \emph{Combine} 
+corresponds to the ``;'' operator and \emph{Delay} takes an effectful computation and embeds the 
+effects in a (delayed) computation:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{async}.\ident{Delay}(\kvd{fun}~() \rightarrow \ident{async}.\ident{Combine}( \\
+\quad\quad (~~\,\kvd{if}~delay~\kvd{then}~
+   \ident{async}.\ident{Bind}(\ident{Async}.\ident{Sleep}(1000), \kvd{fun}~() \rightarrow \ident{async}.\ident{Zero}())\\
+\quad\quad ~~~\,\kvd{else}~\ident{async}.\ident{Zero}()~),\\
+\quad\quad \ident{async}.\ident{Delay}(\kvd{fun} () \rightarrow\\
+\quad\quad\quad \ident{printfn}~\texttt{"Starting..."}\\
+\quad\quad\quad \ident{async}.\ident{ReturnFrom}(\ident{asyncFetch}(url))) ))
+\end{array}
+\end{equation*}
+%
+The \emph{Zero} operation has a type $\ident{unit} \rightarrow A\,\ident{unit}$. It is inserted
+when a computation does not return a value -- here, in both branches of the conditional. The
+result of conditional is composed with the rest of the computation using \emph{Combine} which has
+a type $A\,\ident{unit} \rightarrow A\alpha \rightarrow A\alpha$. The first argument is a unit-returning
+computation, which mirrors the ``;'' operator -- the overall computation runs the left-hand side and
+then returns the result of the right-hand side.
 
-\subsubsection{Effects}
+Finally, the \emph{Delay} operation (of type $(\ident{unit} \rightarrow A\tau) \rightarrow A\tau$ is
+used to wrap any effectful computations (like printing) in the monadic computation to avoid evaluating
+them before the first part of sequential computation is run.
 
-\begin{verbatim}
-async { if delay then do! Async.Sleep(1000) 
-        printfn "Starting..."
-        return! asyncFetch url }
-\end{verbatim}
+% --------------------------------------------------------------------------------------------------
 
-a
+\subsection{Additive parsers and list comprehensions}
+\label{sec:intro-seq-parsers}
 
-\begin{verbatim}
-async.Run(async.Delay(fun () -> 
-  async.Combine(
-    ( if delay then 
-        async.Bind(Async.Sleep(1000), fun () -> async.Zero()) 
-      else async.Zero() ), 
-    async.Delay(fun () -> 
-      printfn "Starting..."
-      async.ReturnFrom(asyncFetch url)) )))
-\end{verbatim}
-imperative monads with sequencing and effects
+An asynchronous workflow returns only \emph{one} value, but parsers or list comprehensions may return 
+multiple values. Such computations can be structured using additive monads (\ident{MonadPlus} in 
+Haskell). These abstractions can be used with F\# computation expressions, but they require different
+typing of \emph{Zero} and \emph{Combine}. It may be also desirable to use different syntax.
 
-\subsection{Additive sequence expressions}
-\label{sec:intro-seq}
+\vspace{-1em}
+\subsubsection{Monadic parsers.} For monadic parsers, we use a notation similar to the one used in
+asynchronous workflows. The difference is that we can now use \ident{return} and \ident{return!} 
+repeatedly. The following parsers recognize one or more and zero or more repetitions of a given
+predicate, respectively:
+%
+\vspace{-0.5em}
+\begin{equation*}
+\begin{array}{l}
+\kvd{let rec}~\ident{zeroOrMore}~p = \ident{parse}~\{\\
+\quad \kvd{return!}~\ident{oneOrMore}~p\\
+\quad \kvd{return}~[\,] ~\}
+\end{array}
+\qquad
+\begin{array}{l}
+\kvd{and}~\ident{oneOrMore}~p = \ident{parse}~\{\\
+\quad \kvd{let!}~x=p\\
+\quad \kvd{let!}~xs = \ident{zeroOrMore}~p\\
+\quad \kvd{return}~x::xs ~\}
+\end{array}
+\vspace{-0.5em}
+\end{equation*}
+%
+The \ident{oneOrMore} function uses just the monadic interface and so its translation uses 
+\emph{Bind} and \emph{Return}. The \ident{zeroOrMore} function is more interesting -- it combines
+a parser that returns one or more occurrences with a parser that always succeeds and returns an empty 
+list. This is achieved using the \emph{Combine} operation:
+%
+\begin{equation*}
+\begin{array}{l}
+\kvd{let rec}~\ident{zeroOrMore}~p = \ident{parse}.\ident{Delay}(\kvd{fun}~()\rightarrow \\
+\quad \ident{parse}.\ident{Combine}(~\ident{parse}.\ident{ReturnFrom}(\ident{oneOrMore}~p), \\
+\hspace{7.8em} \ident{parse}.\ident{Delay}(\kvd{fun} () \rightarrow \ident{parse}.\ident{Return}(\,[\,]\,)~)))
+\end{array}
+\end{equation*}
+%
+The \emph{Combine} operation represents the monoidal operation on parsers (either left-biassed or
+non-deterministic choice) and it has a type $P\alpha \rightarrow P\alpha \rightarrow P\alpha$. Accordingly,
+the \emph{Zero} operations is the unit of the monoid. It represents a parser that always fails (returning
+no values of type $\alpha$) and has a type $\ident{unit}\rightarrow P\alpha$.
 
-\subsection{Additivie parser combinators}
-\label{sec:intro-parsers}
+For effectful sequencing of monads, it only makes sense to use unit-returning values in the left hand
+side of \emph{Combine} and as the result of \emph{Zero}. However, if a computation supports the monoidal
+interface, these operations can combine multiple returned values. This shows that the computation 
+expression mechanism needs certain flexibility -- although the translation is the same in both cases,
+the typing needs to depend on the user-defined types of the operations.
+
+\vspace{-1em}
+\subsubsection{List comprehensions.} Although list comprehensions implement the same abstract type
+as parsers, we need to use different syntax if we want to make the syntactic sugar comparable to 
+built-in features in other languages. The following shows F\# list comprehension and Python generator
+side-by-side:
+
+\begin{equation*}
+\hspace{-2em}
+\begin{array}{l}
+\kvd{let}~\ident{duplicate}(list) = \ident{seq}~\{\\
+\quad \kvd{for}~n~\kvd{in}~list~\kvd{do}  \\
+\quad\quad \kvd{yield}~n          \\
+\quad\quad \kvd{yield}~n*10 ~\}
+\end{array}
+\qquad\qquad
+\begin{array}{l}
+\kvd{def}~\ident{duplicate}(list):\\
+\quad \kvd{for}~n~\kvd{in}~list:  \\
+\quad\quad \kvd{yield}~n          \\
+\quad\quad \kvd{yield}~n*10
+\end{array}
+\end{equation*}
+%
+The computations look very similar -- they iterate over a source list and produce two results
+for each input. In contrast, Haskell monad comprehensions [19] allow us to write $[\;n*10\;|\;n\leftarrow list\;]$
+to multiply all elements by 10, but they are not expressive enough to capture duplication. To do 
+that, the code needs to use the monoidal operation (\ident{mplus}), but that cannot be done
+inside comprehensions.
+
+Although the F\# syntax looks different to what we have seen so far, it is actually very
+similar. The \ident{for} and \ident{yield} constructs are translated to \emph{For} and 
+\emph{Yield} operations which have the same form as \emph{Bind} and \emph{Return}, but provide
+backing for a different syntax. The translation looks as follows:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{seq}.\ident{Delay}(\kvd{fun}~() \rightarrow \ident{seq}.\ident{For}(list, \kvd{fun}~() \rightarrow \\
+\quad \ident{seq}.\ident{Combine}(\ident{seq}.\ident{Yield}(n), \ident{seq}.\ident{Delay}(\kvd{fun}~() \rightarrow 
+   \ident{seq}.\ident{Yield}(n * 10)))~))
+\end{array}
+\end{equation*}
+%
+The \emph{Combine} operation concatenates multiple results and has the standard monoidal type
+$[\alpha] \rightarrow [\alpha] \rightarrow [\alpha]$. The type of \emph{For} is that of monadic 
+binding $[\alpha] \rightarrow (\alpha \rightarrow [\beta]) \rightarrow [\beta]$ and \emph{Yield} has a
+type of monadic unit $\alpha \rightarrow [\alpha]$. We could have provided the \emph{Bind} 
+and \emph{Return} operations in the \ident{seq} builder instead, but this leads to a less intuitive
+syntax that requires users to write \ident{let!} for iteration and \ident{return} for yielding.
+
+As the comparison with Python shows, the flexibility of the syntax makes it possible to write 
+computation expressions that are close to built-in language features. The author of a concrete
+computation (\ident{parse}, \ident{seq}, \ident{async}, \ldots) decides what syntax is appropriate. We
+can only provide anecdotal recommendation -- for computations where the \emph{monoidal} interface 
+is more important, the \ident{for}/\ident{yield} notation fits better, while for computations where
+the \emph{monadic} interface dominates we prefer \ident{let!} and \ident{return}.
+
+% --------------------------------------------------------------------------------------------------
 
 \subsection{Layered asynchronous sequences}
 \label{sec:intro-asyncseq}
 
+It is often useful to combine non-standard aspects of multiple computation types. Abstractly,
+this has be described using monad transformers [99]. F\# does not support monad transformers directly, 
+but they provide a useful conceptual framework. For example, we migth combine 
+non-blocking execution of asynchronous workflows with the ability to return multiple results in 
+list comprehensions -- a file download can then produce data in 1kB buffers as they become available. 
+Such computation is captured by \emph{asynchronous sequences} [14].
+
+Assuming $\ident{Async}\,\tau$ is the type of asynchronous workflows, the composed
+computation can be expressed as follows (inspired by the list transformer [99]):
+%
+\begin{equation*}
+\begin{array}{lcl}
+\kvd{type}~\ident{AsyncSeqInner}\,\tau &~=~& \ident{AsyncNil} ~|~
+    \ident{AsyncCons}~\kvd{of}~\tau \times \ident{Async}\,\tau \\
+\kvd{type}~\ident{AsyncSeq}\,\tau &=& \ident{Async}\,(\ident{AsyncSeqInner}\,\tau)
+\end{array}
+\end{equation*}
+
+When provided with a continuation, asynchronous sequence calls it with either \ident{AsyncNil}
+(to denote the end of the sequence) or with \ident{AsyncCons} that carries a value, together with
+the rest of the asynchronous sequence. It turns out that the flexibility of computation expression 
+makes it possible to provide an elegant syntax for writing computations of this type:
+%
+\begin{equation*}
+\begin{array}{l}
+\kvd{let rec}~\ident{urlPerSecond}~n = \ident{asyncSeq}~\{ \\
+\quad \kvd{do!}~\ident{Async}.\ident{Sleep}~1000 \\
+\quad \kvd{yield}~\ident{getUrl}~i \\
+\quad \kvd{yield!}~\ident{iterate}~(i+1) ~\}
+\end{array}
+\qquad
+\begin{array}{l}
+\kvd{let}~\ident{pagePerSecond}~urls = \ident{asyncSeq}~\{ \\
+\quad \kvd{for}~url~\kvd{in}~\ident{urlPerSecond}~0~\kvd{do}\\
+\quad\quad \kvd{let!}~html = \ident{asyncFetch}~url \\
+\quad\quad \kvd{yield}~url, html ~\}
+\end{array}
+\end{equation*}
+%
+The \ident{urlPerSecond} function creates an asynchronous sequence that produces one URL per
+second. It uses bind (\ident{do!}) of the asynchronous workflow monad to wait one second
+and then composition of asynchronous sequences, together with \ident{yield} to produce the 
+next URL. The \ident{pagePerSecond} function uses \ident{for} to iterate over (bind on) an
+asynchronous sequence and then \ident{let!} to wait for (bind on) an asynchronous workflow.
+The \ident{for} loop is asynchronous and lazy -- it is run each time the caller asks for the 
+next result.
+
+Asynchronous sequences form a monad and so we could use the standard notation for monads with
+just \ident{let!} and \ident{return}. We would then need explicit lifting function that turns
+an asynchronous workflow into an asynchronous sequence that returns a single value. However,
+F\# computation expressions allow us to do better. We can define both \ident{For} and 
+\ident{Bind} with the following types:
+%
+\begin{equation*}
+\begin{array}{rcll}
+\ident{asyncSeq}.\ident{For} &~:~& \ident{AsyncSeq}\,\alpha &
+   \rightarrow (\alpha \rightarrow \ident{AsyncSeq}\,\beta) \rightarrow \ident{AsyncSeq}\,\beta\\
+\ident{asyncSeq}.\ident{Bind} &~:~& \ident{Async}\,\alpha   &
+   \rightarrow (\alpha \rightarrow \ident{AsyncSeq}\,\beta) \rightarrow \ident{AsyncSeq}\,\beta\\
+\end{array}
+\end{equation*}
+%
+We omit the translation of the above example -- it is a straightforward variation on what we have 
+seen so far. A more important point is that we can again benefit from the fact that operations
+of the computation builder are not restricted to a specific type (such as \emph{Bind} for some
+monad $M$).
+
+As previously, the choice of the syntax is left to the author of the computation. Here, asynchronous
+sequences are an additive monad and so we use \ident{for}/\ident{yield}. Underlying
+asynchronous workflows are just monads, so it makes sense to add \ident{let!} that automatically
+lifts a workflow to an asynchronous sequence.
+
+An important aspect of realization that asynchronous sequences can be described using a monad
+transformer means that certain laws hold. In \S\ref{sec:laws-transf} we show how these map to the 
+computation expression syntax.
+
+% --------------------------------------------------------------------------------------------------
+
 \subsection{Applicative formlets}
 \label{sec:intro-formlets}
 
+Our last example shall be...
+
+\begin{equation*}
+\begin{array}{l}
+\kvd{let}~\ident{userFormlet} = \ident{formlet}~\{\\
+\quad \kvd{let!}~name = \ident{Formlet}.\ident{textBox} \\
+\quad \kvd{and}~gender = \ident{Formlet}.\ident{dropDown}~[\texttt{"Male"}; \texttt{"Female"}] \\
+\quad \kvd{return}~name + \texttt{" "} + gender ~\}
+\end{array}
+\end{equation*}
+
+translates to
+
+\begin{equation*}
+\begin{array}{l}
+\ident{formlet}.\ident{Map} \\
+\quad (~\ident{formlet}.\ident{Merge}(\ident{Formlet}.\ident{textBox}, 
+  \ident{Formlet}.\ident{dropDown}~[\texttt{"Male"}; \texttt{"Female"}]),  \\
+\quad~~\kvd{fun}~(name, gender) \rightarrow name + \texttt{" "} + gender~)
+\end{array}
+\end{equation*}
 % ==================================================================================================
 \section{Semantics of computation expressions}
 \label{sec:semantics}
@@ -191,22 +452,11 @@ In this section, we use two examples to show how computation expressions unify s
 from other languages. Then we look at the formal definition in the F\# specification [17].
 
 
-\begin{equation*}
-\begin{array}{lcl}
-\kvd{def}~\ident{duplicate}(list): &\hspace{5em}&\ident{duplicate}~list =\\
-\quad \kvd{for}~n~\kvd{in}~list:               &&\quad \kvd{do}~n~\leftarrow~list\\
-\quad\quad \kvd{yield}~n                       &&\quad \quad~\, (\ident{return}~n)~`\ident{mplus}`\\
-\quad\quad \kvd{yield}~n*10                    &&\quad \quad\quad~\, (\ident{return} \$)\\
-\end{array}
-\end{equation*}
-\begin{verbatim}
-duplicate list = 
-  do a <- list
-     (return a) `mplus` (return $ a * 10)
-\end{verbatim}
-
 
 \newpage
+To download a web page asynchronously and immediately returnthe result, we can write 
+$\ident{return!}~\ident{fetchAsync}(url)$. The translation of the \ident{return!} keyword requires
+the \emph{ReturnFrom} operation of type $A\alpha \rightarrow A\alpha$. The operation
 
 % --------------------------------------------------------------------------------------------------
 
@@ -254,7 +504,7 @@ Typing of yield is similar
 \inference 
   { \Gamma \vdash \expr : \sigma  & \Gamma \cvdash \cexpr : \mtyp{\tau} }
   { \Gamma \vdash \expr ~\{~ \cexpr ~\} : \ntyp \tau }
-&\quad(\sigma.\plc{run}~:~\mtyp{\tau} \rightarrow \ntyp \tau )  
+&\quad(\sigma.\plc{Run}~:~\mtyp{\alpha} \rightarrow \ntyp \alpha )  
 \\[1.5em]
 \inference
   { \Gamma \vdash \expr : \tau_1 &
@@ -265,36 +515,36 @@ Typing of yield is similar
   { \Gamma \vdash \expr : \mtyp{\tau_1} &
     \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
   { \Gamma \cvdash \kvd{let!}~v=\expr~\kvd{in}~\cexpr : \ntyp{\tau_2}  }
-&\quad(\sigma.\plc{bind}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+&\quad(\sigma.\plc{Bind}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
 \\[1.5em]
 \inference
   { \Gamma \vdash \expr : \mtyp{\tau_1} &
     \Gamma, \tya{v}{\tau_1} \cvdash \cexpr : \ntyp{\tau_2} }
   { \Gamma \cvdash \kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr : \ntyp{\tau_2}  }
-&\quad(\sigma.\plc{for}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
+&\quad(\sigma.\plc{For}~:~\mtyp{\alpha} \rightarrow (\alpha \rightarrow \ntyp{\beta}) \rightarrow \ntyp{\beta} )  
 \\[1.5em]
 \inference
   { \Gamma \vdash \expr : \tau }
   { \Gamma \cvdash \kvd{return}~\expr : \mtyp{\tau}  }
-&\quad(\sigma.\plc{return}~:~\alpha \rightarrow \mtyp{\alpha})
+&\quad(\sigma.\plc{Return}~:~\alpha \rightarrow \mtyp{\alpha})
 \\[1.5em]
 \inference
   { \Gamma \vdash \expr : \mtyp \tau }
   { \Gamma \cvdash \kvd{return!}~\expr : \ntyp{\tau}  }
-&\quad(\sigma.\plc{returnFrom}~:~\mtyp{\alpha} \rightarrow \ntyp{\alpha})  
+&\quad(\sigma.\plc{ReturnFrom}~:~\mtyp{\alpha} \rightarrow \ntyp{\alpha})  
 \\[1.5em]
 \inference
   { \Gamma \cvdash \cexpr_1 : \mtyp{\tau_1}  &  \Gamma \cvdash \cexpr_2 : \ntyp{\tau_2}}
   { \Gamma \cvdash \cexpr_1; \cexpr_2 : \ltyp{\tau_1}  }
 &\quad\left(\begin{array}{lll}
-\plc{delay}   &:& (\unit \rightarrow \ntyp{\alpha}) \rightarrow \dtyp{\alpha} \\
-\plc{combine} &:& \mtyp{\tau_1} \rightarrow \dtyp{\tau_2} \rightarrow \ltyp{\tau_2}
+\sigma.\plc{Delay}   &:& (\unit \rightarrow \ntyp{\alpha}) \rightarrow \dtyp{\alpha} \\
+\sigma.\plc{Combine} &:& \mtyp{\tau_1} \rightarrow \dtyp{\tau_2} \rightarrow \ltyp{\tau_2}
 \end{array}\right)
 \\[1.5em]
 \inference
   { \Gamma \vdash \expr : \unit }
   { \Gamma \cvdash \expr : \mtyp{\tau}  }
-&\quad(\sigma.\plc{zero}~:~\unit \rightarrow \mtyp{\tau})
+&\quad(\sigma.\plc{Zero}~:~\unit \rightarrow \mtyp{\tau})
 \end{array}
 \end{equation*}
 
@@ -322,6 +572,9 @@ Zero may
 
 \section{Abstract computation types}
 \label{sec:laws}
+
+\subsection{Monad transformers}
+\label{sec:laws-transf}
 
 % ==================================================================================================
 
