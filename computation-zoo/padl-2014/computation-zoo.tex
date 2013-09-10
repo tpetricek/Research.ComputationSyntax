@@ -213,14 +213,14 @@ F\# requires additional operations -- \emph{Zero} represents monadic unit value,
 corresponds to the ``;'' operator and \emph{Delay} takes an effectful computation and embeds the 
 effects in a (delayed) computation. 
 
-Finally, the \ident{return!} keyword is used to return the result of a computation. 
-It requires an operation \emph{ReturnFrom} of type $A\alpha \rightarrow A\alpha$. This is typically
+We also use the \ident{return!} keyword, which returns the result of a computation and requires
+an operation \emph{ReturnFrom} of type $A\alpha \rightarrow A\alpha$. This is typically
 implemented as an identity function -- its main purpose is to enable the \ident{return!} keyword in 
 the syntax, as this may not be alway desirable \S\ref{sec:intro-seq-parsers}.
 %
 \begin{equation*}
 \begin{array}{l}
-\ident{async}.\ident{Delay}(\kvd{fun}~() \rightarrow \ident{async}.\ident{Combine}( \\
+\ident{async}.\ident{Combine}( \\
 \quad\quad (~~\,\kvd{if}~delay~\kvd{then}~
    \ident{async}.\ident{Bind}(\ident{Async}.\ident{Sleep}(1000), \kvd{fun}~() \rightarrow \ident{async}.\ident{Zero}())\\
 \quad\quad ~~~\,\kvd{else}~\ident{async}.\ident{Zero}()~),\\
@@ -756,7 +756,113 @@ $\expr~\{\,\cexpr\,\}$. The next section discusses these two in more details.
 
 \subsection{Delayed computations}
 \label{sec:semantics-delayed}
-~
+
+We already mentioned that side-effects are an important consideration when adding sequencing to
+monadic comptuations \S\ref{sec:intro-async}. In effectful languages, we need to distinguish 
+between two types of monads. We use the term \emph{monadic computation} for monads that represent 
+a delayed computation such as asynchronous workflows or lazy list comprehensions; the term 
+\emph{monadic containers} will be used for monads that represent a wrapped non-delayed value
+(such as the option type, non-lazy list or the identity monad).
+
+\vspace{-1em}
+\subsubsection{Effects and monadic computations.} The defining feature of \emph{monadic computations}
+is that they permit a \emph{Delay} operation of type $(\unit \rightarrow M\alpha) \rightarrow M\alpha$
+that does not perform the effects associated with the function used as an argument.
+For example, in the continuation monad (underlying asynchronous workflows), the operation builds 
+a computation that takes a continuation -- and so the effects are only run when the continuation
+is provided.
+
+Before going further, we revist the translation of asynchronous workflows using the full set of
+rules to show how \emph{Run} and \emph{Delay} are used. Consider the the following simple computation
+with a corresponding translation:
+%
+\begin{equation*}
+\begin{array}{l}
+\kvd{let}~\ident{answer} = \ident{async}~\{\\
+\quad \ident{printfn}~ \texttt{"Welcome..."}\\
+\quad \kvd{return}~ 42 ~\}
+\end{array}
+\qquad
+\begin{array}{l}
+\kvd{let}~\ident{answer} = \ident{async}.\ident{Run}(\ident{async}.\ident{Delay}(\kvd{fun}~()\rightarrow\\
+\quad \ident{printfn}~ \texttt{"Welcome..."}\\
+\quad \ident{async}.\ident{Return}(42)~))
+\end{array}
+\end{equation*}
+%
+For monadic computations such as asynchronous workflows, we do not expect that the defining
+\ident{answer} will print ``Welcome''. This is achieved by the wrapping specified in the 
+translation rule for the $\expr~\{\,\cexpr\,\}$ expression. As already mentioned, the result
+of \emph{Delay} is a 
+
+In this case, the result of \emph{Delay} is a computation $A\,\ident{int}$ that encapsulates the
+delayed effect. For monadic containers, the \emph{Run} function is a simple identity -- contrary
+to what the name suggests, it does not run the computation (although that might be an interesting
+use beyond standard abstract computations). The need for \emph{Run} becomes obvious when we look
+at monadic containers.
+
+\vspace{-1em}
+\subsubsection{Effects and monadic containers.} For monadic containers, it is impossible to define
+a \emph{Delay} operation that does not perform the effects and has a type $(\unit \rightarrow M\alpha) \rightarrow M\alpha$,
+because the resulting type has no way of capturing unevaluated code. However, the (\emph{seq}) typing 
+rule in Figure~\ref{fig:typing} permits an alternative typing. Consider the following example using 
+the Maybe (option) monad:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{maybe}~\{~\kvd{if}~b=0~\kvd{then}~\kvd{return!}~\ident{None}\\
+\hspace{3.85em}  \ident{printfn}~\texttt{"Calculating..."}\\
+\hspace{3.85em}  \kvd{return}~a\,/\,b~\}\\
+\end{array}
+\end{equation*}
+%
+Using the same translation rules, \emph{Run}, \emph{Delay} and \emph{Delay} are inserted as follows:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{maybe}.\ident{Run}(\ident{maybe}.\ident{Delay}(\kvd{fun}~()\rightarrow\\
+\quad \ident{maybe}.\ident{Combine}\\
+\quad\quad (~(\kvd{if}~b=0~\kvd{then}~\ident{maybe}.\ident{ReturnFrom}(\ident{None})~
+    \kvd{else}~\ident{maybe}.\ident{Zero}()), \\
+\hspace{2.9em} \ident{maybe}.\ident{Delay}(\kvd{fun}~()\rightarrow \ident{printfn}~\texttt{"Calculating..."}\\
+\hspace{12.8em}     \ident{maybe}.\ident{Return}(a\,/\,b))~)))
+\end{array}
+\end{equation*}
+
+\noindent
+The key idea is that we do not have to use the type $M\alpha$ for representing delayed computations,
+but can instead use two different types throughout the code. $M\alpha$ for values representing
+evaluated containers and $\unit \rightarrow M\alpha$ for delayed computations. The operations 
+have the following types:
+%
+\begin{equation*}
+\begin{array}{lcl}
+\emph{Delay}   &~:~& (\unit \rightarrow M\alpha) \rightarrow (\unit \rightarrow M\alpha)\\
+\emph{Run}     &~:~& (\unit \rightarrow M\alpha) \rightarrow M\alpha\\
+\emph{Combine} &~:~& M\,\unit \rightarrow (\unit \rightarrow M\alpha) \rightarrow M\alpha
+\end{array}
+\end{equation*}
+%
+Here, the \emph{Delay} operation becomes just an identity that returns the function created by the
+translation. In the translation, the result of \emph{Delay} can be passed either to \emph{Run}
+or as the second argument of \emph{Delay}, so these need to be changed accordingly. The \emph{Run}
+function now becomes important as it turns the delayed function into a value of the expected
+type $M\alpha$.
+
+\vspace{-1em}
+\subsubsection{Unified treatment of effects.} In the typing rules \S\ref{sec:semantics-typing}, 
+we did not explicitly list the two options, because they can be generalized. We require that the
+result of \emph{Delay} is some (possibly different) abstract type $D\alpha$ representing delayed
+computations. For monadic computations, the type is just $M\alpha$ and for monadic containers,
+it is $\unit \rightarrow M\alpha$. Our typing is even more flexible, as it allows usage of 
+multiple different computation types -- but treatment of effects is one example where this
+additional flexibility is necessary.
+
+Finally, it should be noted that we used a slight simplification. The actual F\# implementation 
+does not strictly require \emph{Run} and \emph{Delay} in the translation of $\expr~\{\,\cexpr\,\}$. 
+They are only used if they are present. 
+
+
 % ==================================================================================================
 
 \section{Abstract computation types}
@@ -782,6 +888,8 @@ anything with Map, Bind and Return has to satisfy Bind (f >> Return) = Map
 
 \section{Conclusions}
 \label{sec:conclusions}
+
+Related work - do notation works for any monad - which makes it more reusable but weaker
 
 % ==================================================================================================
 
