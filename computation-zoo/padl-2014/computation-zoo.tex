@@ -107,7 +107,7 @@ syntactic equalities hold as a result \S\ref{sec:laws}.
 \vspace{-1em}
 \subsubsection{Syntax and typing.} We revisit the definitions of computation expressions. We provide
 typing rules that capture idiomatic uses \S\ref{sec:semantics-typing}, extend the translation
-to support applicative functors \S\ref{sec:applicative} and discuss the threatment of effects
+to support applicative functors \S\ref{sec:intro-formlets} and discuss the threatment of effects
 \S\ref{sec:semantics-delayed} that is needed in impure language.
 
 \vspace{1em}
@@ -700,26 +700,26 @@ respectively).
 \begin{equation*}
 \hspace{-1em}\begin{array}{rcl}
 \expr ~\{~ \cexpr ~\} &~=~& \kvd{let}~m = \expr ~\kvd{in}~m.\ident{Run}(m.\ident{Delay}(\kvd{fun}~() \rightarrow \tsl{\cexpr}))
-\\[0.7em]
-\tsl{\kvd{let}~v=\expr~\kvd{in}~\cexpr}          &=& \kvd{let}~v=\expr~\kvd{in}~\tsl{\cexpr} \\[0.1em]
-\tsl{\kvd{let!}~\binds~\kvd{in}~\cexpr}          &=& m.\ident{Bind}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \tsl{\cexpr}) \\[0.1em]
+\\[0.5em]
+\tsl{\kvd{let}~v=\expr~\kvd{in}~\cexpr}          &=& \kvd{let}~v=\expr~\kvd{in}~\tsl{\cexpr} \\[0.08em]
+\tsl{\kvd{let!}~\binds~\kvd{in}~\cexpr}          &=& m.\ident{Bind}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \tsl{\cexpr}) \\[0.08em]
 \tsl{\kvd{let!}~\binds~\kvd{in}~\kvd{return}\expr}          &=&
-   m.\ident{Map}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \expr) \\[0.1em]
-\tsl{\kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr} &=& m.\ident{For}(\expr,\kvd{fun}~()\rightarrow \tsl{\cexpr}) \\[0.1em]
+   m.\ident{Map}(\tsb{\binds},\kvd{fun}~\tsv{\binds}\rightarrow \expr) \\[0.08em]
+\tsl{\kvd{for}~v~\kvd{in}~\expr~\kvd{do}~\cexpr} &=& m.\ident{For}(\expr,\kvd{fun}~()\rightarrow \tsl{\cexpr}) \\[0.08em]
 %
-\tsl{\kvd{return}~\expr}   &=& m.\ident{Return}(\expr) \\[0.1em]
-\tsl{\kvd{return!}~\expr}  &=& m.\ident{ReturnFrom}(\expr) \\[0.1em]
-\tsl{\cexpr_1; \cexpr_2}   &=& m.\ident{Combine}(\tsl{\cexpr_1}, \;m.\ident{Delay}(\kvd{fun}~() \rightarrow \tsl{\cexpr_2} )) \\[0.1em]
+\tsl{\kvd{return}~\expr}   &=& m.\ident{Return}(\expr) \\[0.08em]
+\tsl{\kvd{return!}~\expr}  &=& m.\ident{ReturnFrom}(\expr) \\[0.08em]
+\tsl{\cexpr_1; \cexpr_2}   &=& m.\ident{Combine}(\tsl{\cexpr_1}, \;m.\ident{Delay}(\kvd{fun}~() \rightarrow \tsl{\cexpr_2} )) \\[0.08em]
 \tsl{\expr}                &=& \expr; ~m.\ident{Zero}()
-\\[0.7em]
-\tsb{v=\expr} &=& \expr \\[0.1em]
+\\[0.5em]
+\tsb{v=\expr} &=& \expr \\[0.08em]
 \tsb{v=\expr ~\kvd{and}~\binds} &=& m.\ident{Merge}(\expr, \tsl{\binds})
-\\[0.7em]
-\tsv{v=\expr} &=& v \\[0.1em]
+\\[0.5em]
+\tsv{v=\expr} &=& v \\[0.08em]
 \tsv{v=\expr ~\kvd{and}~\binds} &=& v, \tsv{\binds} 
 \end{array}
 \end{equation*}
-\vspace{-1em}
+\vspace{-1.2em}
 \caption{Translation rules for computation expressions}
 \label{fig:translation}
 \vspace{-1em}
@@ -730,14 +730,30 @@ respectively).
 \subsection{Translation}
 \label{sec:semantics-transl}
 
-Non-deterministic \ident{let!} but that's ok - monad laws
+The translation is defined as a mapping $\tsl{-}$ that is parameterized by a variable $m$ which
+refers to the current instance of a computation builder. This parameter is later used in the
+translation to invoke members of the builder, such as $m.\ident{Return}(\ldots)$. Multiple 
+variable bindings are translated using $\tsb{\binds}$ and we define a helper mapping 
+$\tsv{\binds}$ that turns bindings into a simple pattern that can be used to decompose a tuple
+constructed by merging computations using the \emph{Merge} operation.
 
-`Default Run and default Delay
+According to the F\# specification, a particular construct of computation expression syntax is
+allowed only when the static type of the computation builder defines members that are required
+by the translation. It is easy to check that our typing rules guarantee that a well-typed computation
+expression can always be translated to a well-typed F\# expression.
 
+Careful readers have already noticed that our definition of $\tsl{-}$ is ambiguous. The 
+\ident{let!} binding followed by \ident{return} can be translated in two different ways. In the
+real implementation, the translation using \emph{Map} is preferred, but we do not specify this in
+the paper. The reason is that the laws in \S\ref{sec:laws-monads} require the two translations to
+be equivalent. For monads, this equivalence is easy to see by considering the definition of
+\emph{Map} in terms of \emph{Bind} and \emph{Return}.
 
-% ==================================================================================================
+In earlier discussion, we omitted the \emph{Run} and \emph{Delay} members in the translation of
+$\expr~\{\,\cexpr\,\}$. The next section discusses these two in more details.
 
-\newpage
+% --------------------------------------------------------------------------------------------------
+
 \subsection{Delayed computations}
 \label{sec:semantics-delayed}
 ~
@@ -747,14 +763,20 @@ Non-deterministic \ident{let!} but that's ok - monad laws
 \label{sec:laws}
 ~
 
+\subsection{Monad laws}
+\label{sec:laws-monads}
+
+anything with Map, Bind and Return has to satisfy Bind (f >> Return) = Map
+
 \subsection{Monad transformers}
 \label{sec:laws-transf}
 ~
 
-% ==================================================================================================
+% --------------------------------------------------------------------------------------------------
 
-\section{Applicative computations}
-\label{sec:applicative}
+\subsection{Applicative computations}
+\label{sec:laws-appl}
+~
 
 % ==================================================================================================
 
