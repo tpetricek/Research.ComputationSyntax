@@ -48,7 +48,7 @@
 \newcommand{\unit}{\ident{unit}}
 
 % Translation rules
-\newcommand{\tsl}[1]{|[ #1 |]_m}
+\newcommand{\tsl}[1]{|[ \,#1\, |]_m}
 \newcommand{\tsb}[1]{\langle\hspace{-0.25em}\langle #1 \rangle\hspace{-0.25em}\rangle_m}
 \newcommand{\tsv}[1]{\langle #1 \rangle}
 
@@ -820,12 +820,11 @@ Using the same translation rules, \emph{Run}, \emph{Delay} and \emph{Delay} are 
 %
 \begin{equation*}
 \begin{array}{l}
-\ident{maybe}.\ident{Run}(\ident{maybe}.\ident{Delay}(\kvd{fun}~()\rightarrow\\
-\quad \ident{maybe}.\ident{Combine}\\
+\ident{maybe}.\ident{Run}(\ident{maybe}.\ident{Delay}(\kvd{fun}~()\rightarrow \ident{maybe}.\ident{Combine}\\
 \quad\quad (~(\kvd{if}~b=0~\kvd{then}~\ident{maybe}.\ident{ReturnFrom}(\ident{None})~
     \kvd{else}~\ident{maybe}.\ident{Zero}()), \\
 \hspace{2.9em} \ident{maybe}.\ident{Delay}(\kvd{fun}~()\rightarrow \ident{printfn}~\texttt{"Calculating..."}\\
-\hspace{12.8em}     \ident{maybe}.\ident{Return}(a\,/\,b))~)))
+\hspace{12.8em}     \ident{maybe}.\ident{Return}(a\,/\,b))~)~))
 \end{array}
 \end{equation*}
 
@@ -865,14 +864,192 @@ They are only used if they are present.
 
 % ==================================================================================================
 
-\section{Abstract computation types}
+\section{Computation expression laws}
 \label{sec:laws}
-~
 
-\subsection{Monad laws}
+Although computation expressions are not tied to any specific abstract computation type, we 
+showed that they are usually used with well-known abstractions like monads, monad transofrmers or 
+applicative functors. 
+
+This means three good things. First, we get better understanding of what computations can be encoded
+(and how). Second, we can add a more precise typing \S\ref{sec:semantics-typing}. Third, we know
+that certain syntactic transformations (refactorings) preserve the meaning of computation. This
+section looks at the last point. 
+
+This section assumes that there are no side-effects and we ignore \emph{Run} and \emph{Delay}.
+These can be added to the picture, but it complicates the presentation.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Monoid and semi-group laws}
+\label{sec:laws-monoids}
+
+We start by looking at the simplest possible structure. A semigroup $(S, \circ)$ consists of a set
+$S$ and an associative binary operation $\circ$ meaning that $a \circ (b \circ c) = (a \circ b) \circ c$.
+A computation expression corresponding to a semigroup defines only \emph{Combine} (of a type
+$M\alpha \rightarrow M\alpha \rightarrow M\alpha$). To allow appropriate syntax, we also add
+\emph{YieldFrom} which is just the identity function. The associativity implies the following
+syntactic equivalence:
+%
+\begin{equation*}
+\ident{m}~\{~\cexpr_1; \,\cexpr_2; \,\cexpr_3 ~\} ~\equiv~
+  \ident{m}~\{~\kvd{yield!}~\ident{m}~\{ \cexpr_1; \,\cexpr_2; \}; \,\cexpr_3 ~\}
+\end{equation*}
+
+\noindent
+For semigroups, the syntax is rather limited, but given a value $x$ of type $M\tau$ it is possible
+to write $\ident{yield!}~x$ to return the value. 
+
+A monoid $(S, \circ, \epsilon)$ is a semigroup $(S, \circ)$ with an identity element $\epsilon$ meaning 
+that for all values $a\in S$ it holds that $\epsilon \circ a = a = a \circ \epsilon$. The identity
+element can be added to computation builder as the \emph{Zero} member. This operation is used when
+a computation uses conditional without \ident{else} branch. Thus we get:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{m}~\{~  \kvd{if}~\ident{false}~\kvd{then}~ \cexpr_1\\
+\hspace{1.9em} \cexpr_2 ~\}
+\end{array} 
+~\equiv~
+\ident{m}~\{~ \cexpr_2 ~\}\\
+~\equiv~
+\begin{array}{l}
+\ident{m}~\{~  \cexpr_2 \\
+\hspace{2.0em} \kvd{if}~\ident{false}~\kvd{then}~ \cexpr_1 ~\}
+\end{array}
+\end{equation*}
+%
+Although these are simple laws, they can be used to reason about list comprehensions. The associativity
+means that we can move a part of computation expression (that uses \ident{yield!} repeatedly) into a
+separate computation. To use the identity law, consider a recursive function that generates numbers
+up to 100:
+%
+\begin{equation*}
+\begin{array}{l}
+\kvd{let}~\kvd{rec}~\ident{range}~n = \\
+\quad \ident{seq}~\{~ \kvd{yield}~n\\
+\hspace{3.7em} \kvd{if}~n < 100~\kvd{then}~\kvd{yield!}~\ident{range}~(n + 1)~\}
+\end{array}
+\end{equation*}
+%
+Here, we can see that when $n=100$, the body is equivalent to just $\ident{m}~\{~\ident{yield}~100~\}$.
+Indeed, this is an expected property of the \ident{if} construct -- the law guarantees that the 
+property holds even for an \ident{if} construct that is reinterpreted by some (monoidal) computation
+expression.
+
+% --------------------------------------------------------------------------------------------------
+
+\subsection{Monad and additive monad laws}
 \label{sec:laws-monads}
 
-anything with Map, Bind and Return has to satisfy Bind (f >> Return) = Map
+Monad laws are well-understood and the corresponding equivalent computation expressions do
+not significantly differ from the laws about Haskell's do notation:
+%
+\begin{equation*}
+\begin{array}{rl}
+\ident{m}~\{~ \kvd{let!}~y=\ident{m}~\{~\kvd{return}~x~\}~\kvd{in}~\cexpr~ \}
+&~\equiv~ \ident{m}~\{~ \kvd{let}~y=x~\kvd{in}~\cexpr~ \}
+\\
+\ident{m}~\{~ \kvd{let!}~x=c~\kvd{in}~\kvd{return}~x \}
+&~\equiv~ \ident{m}~\{~ \kvd{return!}~c \}
+\end{array}
+\end{equation*}
+\begin{equation*}
+\begin{array}{rcl}
+      &\ident{m}~\{~ \kvd{let!}~x=\ident{m}~\{~\kvd{let!}~y=c~\kvd{in}~\cexpr_1~\}~\kvd{in}~\cexpr_2~\}&\equiv\\
+\equiv&\ident{m}~\{~ \kvd{let!}~y=c~\kvd{in}~\kvd{let!}~x=\ident{m}~\{~\cexpr_1~\}~\kvd{in}~\cexpr_2~\}\\
+\end{array}
+\end{equation*}
+%
+However, there is more to be said about the \emph{Map} operation in the translation and
+about laws of additive monads (\ident{MonadPlus} typeclass in Haskell).
+
+\vspace{-1em}
+\subsubsection{Alternative translations.} When discussing the translation rules 
+\S\ref{sec:semantics-transl}, we noted that the rules are ambiguous when both \emph{Map} and
+\emph{Bind} operations are present. The following can be translated both monadically and 
+applicatively:
+%
+\begin{equation*}
+\ident{m}~\{~\kvd{let!}~x = c~\kvd{in}~\kvd{return}~\expr~\}\\
+\end{equation*}
+%
+The two translations are shown below. Assuming that our computation is a monad,
+this is a well-known definition of \emph{Map} in terms of \emph{Bind} and \emph{Return}:
+%
+\begin{equation*}
+\ident{m}.\ident{Map}(x, \kvd{fun}~x \rightarrow \expr) ~\equiv~
+  \ident{m}.\ident{Bind}(x, \kvd{fun}~x \rightarrow \ident{m}.\ident{Return}(\expr))\\
+\end{equation*}
+%
+More generally, if a computation builder defines both \emph{Map} and \emph{Bind} (even if they are
+not based on a monad), we require this equation to guarantee that the two possible translations 
+produce equivalent computations.
+
+\subsubsection{Additive monads.} Additive monads are computations that combine monad with 
+the monoidal structure. As shown earlier \S\ref{sec:intro-seq-parsers}, these can be embedded
+using \ident{let!}/\ident{return} or using \ident{for}/\ident{yield} (depending on which 
+aspect is ``more important'').
+
+The set of laws required for such computations is not fully resolved [99]. A more generally 
+accepted law is \emph{left distributivity} -- applying monoidal operation and then binding is equivalent
+to binding on two computations and then combining the results. In terms of computation builder
+operations:
+%
+\begin{equation*}
+\ident{m}.\ident{For}(\ident{m}.\ident{Combine}(a, b), f)
+~\equiv~
+\ident{m}.\ident{Combine}(\ident{m}.\ident{For}(a, f), \ident{m}.\ident{For}(b, f))
+\end{equation*}
+%
+We intentionally use the \emph{For} operation (corresponding to the \ident{for} keyword), because
+this leads to the following intuitive syntactic equality:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{m}~\{~  \kvd{for}~x~\kvd{in}~\ident{m}~\{~\cexpr_1;\;\cexpr_2~\}~\kvd{do}\\
+\hspace{2.0em}\quad \cexpr~\}
+\end{array}~
+\begin{array}{c}\equiv\\~\end{array}~
+\begin{array}{l}
+\ident{m}~\{~ \kvd{for}~x~\kvd{in}~\ident{m}~\{~\cexpr_1~\}~\kvd{do}~\cexpr \\
+\hspace{2em}  \kvd{for}~x~\kvd{in}~\ident{m}~\{~\cexpr_2~\}~\kvd{do}~\cexpr~\}
+\end{array}
+\end{equation*}
+%
+If we read the code as an imperative looping construct (without the computational reinterpretation),
+then this is, indeed, a valid law about \ident{for} loops.
+
+Another law that is sometimes required about additive monads is \emph{left catch}. It states that
+combining a computation that immediately returns a value with any other computation results in 
+a computation that just returns the value:
+%
+\begin{equation*}
+\hspace{-3em}
+\ident{m}.\ident{Combine}(\ident{m}.\ident{Return}(v), a)
+~~\equiv~~
+\ident{m}.\ident{Return}(v)
+\end{equation*}
+%
+This time, we intentionally used the \emph{Return} member instead of \emph{Yield}, because the law
+corresponds to the following syntactic equivalence:
+%
+\begin{equation*}
+\hspace{-3em}
+\begin{array}{l}
+\ident{m}~\{~  \kvd{return}~v; ~ \cexpr~\}
+\end{array}~~\equiv~~
+\begin{array}{l}
+\ident{m}~\{~  \kvd{return}~v~\}\\
+\end{array}
+\end{equation*}
+%
+The fact that \emph{left distributivity} corresponds to an intuitive syntactic equality
+about \ident{for}/\ident{yield} while \emph{left catch} corresponds to a syntactic equality
+about \ident{let!}/\ident{return} provides a useful guidance for choosing between the two
+syntactic options. The former is appropriate for list comprehensions (and other collections), 
+while the latter is appropriate for example for the left-biased option (Maybe) monad, imperative 
+computations [99] or software transactional memory.
 
 \subsection{Monad transformers}
 \label{sec:laws-transf}
@@ -899,12 +1076,6 @@ Related work - do notation works for any monad - which makes it more reusable bu
 
 \bibliographystyle{abbrv}
 \bibliography{computation-zoo}
-
-\appendix
-
-\section{Bonus}
-
-
 
 
 \end{document}
