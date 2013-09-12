@@ -1053,13 +1053,111 @@ computations [99] or software transactional memory.
 
 \subsection{Monad transformers}
 \label{sec:laws-transf}
-~
+
+There are multiple ways of composing or layering monads [99, 98]. Monad transformers are perhaps 
+the most widely known technique. A monad transformer is a type constructor $T\,m$ together with
+a \emph{Lift} operation. For some monad $M$ the operation has a type $M\,\alpha \rightarrow T\,M\,\alpha$.
+and it turns a computation in the underlying monad into a computation in the composed monad.
+
+The result of monad transformer is also a monad. This means that we can use the usual syntactic 
+sugar for monads, such as the do notation in Haskell. However, a more specific notation can
+use the additional \emph{Lift} operation.
+
+We demonstrated encoding of syntax for composed monads when discussing
+asynchronous sequences \S\ref{sec:intro-asyncseq}. An asynchronous sequence $\ident{AsyncSeq}\,\alpha$ 
+is a computation obtained by applying the list monad transformer [97] to the asynchronous
+workflow $\ident{Async}\,\alpha$ monad. Asynchronous sequences are \emph{additive monads} satisfying 
+the left distributivity law, so we choose the \ident{for}/\ident{yield} syntax for working with 
+the composed computation. We also provided an additional \emph{Bind} operation to support 
+awaiting a single asynchronous workflow using the \ident{let!} construct. This operation is
+defined in terms of \emph{Lift} of the monad transformer and \emph{For} (monadic bind) of the
+composed computation:
+%
+\begin{equation*}
+\ident{asyncSeq}.\ident{Bind}(a, f) = \ident{asyncSeq}.\ident{For}(\ident{asyncSeq}.\ident{Lift}(a), f)
+\end{equation*}
+%
+There are two laws that hold about monad transforers. To avoid confusion, we use asynchronous 
+workflows and sequences in the explanation, but we could easily generalize. The first law states 
+that composing \emph{Return} of asynchronous workflows with \emph{Lift} should be equivalent to the 
+\emph{Yield} of asynchronous sequences. The other states that \emph{Lift} distributes over monadic
+bind. 
+
+Our syntax always combines \emph{Lift} with \emph{For} and so there are multiple syntactic 
+equivalences that follow from the laws. The following are the most direct (the first one also
+relies on right identity for monads):
+%
+\begin{equation*}
+\begin{array}{c}
+\ident{asyncSeq}~\{~ \kvd{let!}~x = \ident{async}~\{~\kvd{return}~v~\}~\kvd{in}~\kvd{return}~x ~\} ~\equiv~
+  \ident{asyncSeq}~\{~ \kvd{return}~v ~\}
+\\[0.7em]
+\ident{asyncSeq}~\{~ \kvd{let!}~x = \ident{async}~\{~\kvd{let!}~y = c~\kvd{in}~\cexpr_1~\}~\kvd{in}~\cexpr_2 ~\} ~\equiv~\\
+~\equiv~ \ident{asyncSeq}~\{~ \kvd{let!}~y = c~\kvd{in}~\kvd{let!}~x = \ident{async}~\{~\cexpr_1~\}~\kvd{in}~\cexpr_2 ~\}
+\end{array}
+\end{equation*}
+%
+The first equation returns the value $v$ without any asynchronous waiting in both cases
+(although, in presence of side-effects, this is made more complicated by cancellation). 
+The second equation is more subtle. The left-hand side awaits a single asynchronous workflow 
+that first awaits $c$ and then does more work. The right-hand side awaits $c$ lifted to an 
+asynchronous sequence and then awaits the rest (again, lifted into an asynchronous sequence).
 
 % --------------------------------------------------------------------------------------------------
 
 \subsection{Applicative computations}
 \label{sec:laws-appl}
-~
+
+The last type of computations that we discussed \S\ref{sec:intro-formlets} is \emph{applicative functor}.
+We use the less common definition (called \ident{Monoidal} by McBride and Paterson [99]). The 
+definition consists of \emph{Map} and \emph{Merge} operations, together with a unit computation.
+We use the unit to define \emph{Zero} -- in the translation it will only be used in computations that 
+contain some unit-returning expression, such as $()$.
+
+The identity law guarantees that merging with a unit and then projecting the non-unit value
+produces an equivalent computation:
+%
+\begin{equation*}
+\begin{array}{l}
+\ident{f}~\{~  \kvd{let!}~x = \ident{f}~\{~()~\}\\
+\hspace{1.4em} \kvd{and}~y = c~\kvd{in}~\kvd{return}~y~\}
+\}
+\end{array}
+~\equiv~ c ~\equiv~
+\begin{array}{l}
+\ident{f}~\{~  \kvd{let!}~x = c\\
+\hspace{1.4em} \kvd{and}~y = \ident{f}~\{~()~\}~\kvd{in}~\kvd{return}~x~\}
+\}
+\end{array}
+\end{equation*}
+%
+The naturality law specifies that \emph{Merge} distributes over \emph{Map}, which translates to
+the following equivalence (assuming $x_1$ not free in $\expr_2$ and vice versa):
+%
+\begin{equation*}
+\begin{array}{c}
+\begin{array}{l}
+\ident{f}~\{~ \kvd{let!}~y_1 = \ident{f}~\{~\kvd{let!}~x_1 = c_1~\kvd{in}~\kvd{return}~\expr_1 ~\} \\
+\hspace{1.40em}   \kvd{and}~y_2 = \ident{f}~\{~\kvd{let!}~x_2 = c_2~\kvd{in}~\kvd{return}~\expr_2 ~\}~\kvd{in}~ \expr~\}
+\end{array} ~\equiv~
+\\[1.2em]
+~\equiv~
+\begin{array}{l}
+\ident{f}~\{~ \kvd{let!}~x_1 = c_1~\kvd{and}~x_2 = c_2~\kvd{in}~ 
+              \kvd{let}~y_1, y_2 = \expr_1, \expr_2~\kvd{in}~ \expr~\}
+\end{array}
+\end{array}
+\end{equation*}
+
+As with the earlier syntactic rules, we can leave out the non-standard aspect
+of the computations and read them as ordinary functional code and get correct and 
+expected laws. This means that the laws, again, guarantee that intuition about the
+syntax used by computation expressions will be correct.
+
+Finally, the \emph{Merge} operation is also required to be associative -- this does not have
+any corresponding syntax, but it means that the user does not need to know implementation
+details of the compiler -- it does not matter whether \ident{let!}\ldots\ident{and}\ldots\,
+is left-associative or right-associative.
 
 % ==================================================================================================
 
@@ -1070,8 +1168,8 @@ Related work - do notation works for any monad - which makes it more reusable bu
 
 % ==================================================================================================
 
-\section*{Acknowledgements}
-
+\subsubsection{Acknowledgements.} We are grateful to Dominic Orchard, Alan Mycroft, Sam Lindley,
+anonymous reviewers of previous draft and the audience of TFP 2012.
 
 
 \bibliographystyle{abbrv}
