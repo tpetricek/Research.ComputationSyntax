@@ -67,7 +67,7 @@ They support a wide range of computations, depending on what operations are avai
 provide greater syntactic flexibility leading to a more intuitive syntax, without resorting to 
 full macro-based meta-programming. 
 
-\quad We show that computation expressions can structure well-known computations such as monoidal 
+\quad We show that computation expressions can structure well-known computations including monoidal 
 list comprehensions, monadic parsers, applicative formlets and asynchronous sequences based on the 
 list monad transformer. We also present typing rules for computation expressions that are capable of 
 capturing all these applications. 
@@ -77,50 +77,36 @@ capturing all these applications.
 % ==================================================================================================
 
 \section{Introduction}
-Structures like monads [1] provide a way for composing computations with additional features. 
-There are many examples -- monads can be composed using monad transformers [2], applicative
-functors provide a more general abstraction useful for web programming [3] and additive monads
-are useful for parsers [4].
+Computations with non-standard aspects like non-determinism, effects, asynchronicity or their
+combinations can be captured using a variety of abstract computation types. In Haskell, we write 
+such computations using a mix of combinators and syntactic extensions like monad comprehensions 
+\cite{monad-compre} and ``do'' notation. Languages such as Python and C\# emphasize the syntax 
+and provide single-purpose support e.g. for asynchrony \cite{cs-async} and list generators
+\cite{csharp-iterators}. 
 
-In Haskell, we can write such computations using a mix of combinators and syntactic extensions like 
-monad comprehensions [19] and ``do-notation''. On the other hand, languages such as Python and C\# 
-emphasize the syntax and provide single-purpose support for asynchrony [20] and list generators [11]. 
+Using such abstractions can be made simpler and more intuitive 
+if we employ a general syntactic machinery. F\# computation expressions provide
+\emph{uniform} syntax that supports monoids, monads \cite{monads-fp}, monad transformers 
+\cite{monad-transformers} and applicative functors \cite{applicative}. They reuse familiar 
+syntax for including loops and exception handling -- the laws of underlying
+abstractions guarantee that these constructs preserve intuition about code. At the same time, 
+the mechanism is \emph{adaptable} and enables appropriate syntax depending on the abstraction.
 
-In this paper we survey the computations that can be express in the more general notation found in F\# called
-``computation expressions''.  We show that significant improvements in compositional, intuitive programming with monads, 
-monoids, asynchronous sequences and applicative functors can be made if a more general syntactic machinery is employed.
-We believe a language should provide \emph{uniform} syntactic support that 
-can capture common patterns in different abstractions -- for example, syntax to support 
-exception handling -- but is \emph{adaptable} and enables appropriate syntax depending
-on the abstraction. This paper shows that F\# computation expressions provide such mechanism.
+Most languages, including Haskell, Scala, C\#, JavaScript and Python have multiple
+syntactic extensions that improve computational expressivity: queries, 
+iterators, comprehensions, asynchronous computations are just a few. However,
+``syntactic budget'' for such extensions is limited. Haskell already uses three notations
+for comprehensions, monads and arrows \cite{arrows}. C\# and Scala have multiple notations
+for queries, comprehensions, asynchronicity and iterators. The more we get with one 
+mechanism, the better. As we show, computation expressions give a lot for relatively 
+low cost -- notably, without resorting to full-blown macros.
 
-
-By contrast, the main computational notations in  Haskell (``do-notation'') and Scala (``flatMap monads``) 
-are relatively weak: for example, they don't integrate with an exception-handling syntax, and they don't support the
-range of computations described in this paper.  The observations in this paper are thus relevant to languages in the spirit of 
-Haskell, Scala, C\#, F\#,  Javascript and Python. All of these have added (and sometimes deprecated) 
-multiple non-trivial syntactic extensions aimed at improved computational expressivity -- queries, iterators, monadic syntax, 
-comprehensions, asynchronous computations, futures, arrows, continuations, reactions -- with 
-widespread impact on mainstream programming as a result. Importantly, the ``syntactic budget'' to support 
-compositional computations in such languages is somewhat limited -- for example, Haskell and 
-its extensions use four notations for  comprehensions, monads, idioms and arrows alone, and both C\# and Scala
-have multiple notational devices for queries, comprehensions, iterators and asynchronous programming. 
-The more ``bang'' we get with one syntactic mechanism, the better. As we show in this paper, computation expressions
-give a lot of ``bang'' for relatively low cost.
-
-Notably, this is achieved this without resorting to full-blown macro-based meta-programming. For the languages
-mentioned above, macros are generally regarded as ``too powerful'', since they allow users to disconnect program syntax and 
-semantics too easily. Instead, we want mechanisms that do not intrude on the majority of programs, and, when used, 
-encourage a natural connection between syntax and resulting computations. 
-The intention is that F\# computation expressions are much more \emph{general} than computation syntaxes 
-provided by other languages (apart from those with advanced macro facilities), and are also
-\emph{intuitive} and \emph{compositional}.   
-
-Although some of the technical aspects of the feature have been described before\footnote{F\# 3.0 extends the 
+Some of the technical aspects of the feature have been described before\footnote{F\# 3.0 extends the 
 mechanism further to accomodate extensible query syntax. To keep this paper focused, we leave analysis 
-of these extensions to future work.} [17], this paper is novel in that it relates the mechanism to 
+of these extensions to future work.} \cite{fsharp-spec}, but this paper is novel in that it relates the mechanism to 
 a range of well-known abstract computations. We also present new typing rules based on those uses.
 
+\vspace{-1em}
 \subsubsection{Practical examples.} 
 We demonstrate the breadth of computations that can be structured using F\# computation expressions.
 The applications include asynchronous workflows and sequences \S\ref{sec:intro-async}, 
@@ -133,48 +119,45 @@ of abstract computations, including additive monads and monad transformers, and 
 syntactic equalities hold as a result \S\ref{sec:laws}.
 
 \vspace{-1em}
-\subsubsection{Syntax and typing.} We revisit the definitions of computation expressions. We provide
-typing rules that capture idiomatic uses \S\ref{sec:semantics-typing}, extend the translation
-to support applicative functors \S\ref{sec:intro-formlets} and discuss the treatment of effects
-\S\ref{sec:semantics-delayed} that is needed in impure language.
+\subsubsection{Syntax and typing.} We give typing rules that capture idiomatic uses of computation
+expressions \S\ref{sec:semantics-typing}, extend the translation to support applicative functors 
+\S\ref{sec:intro-formlets} and discuss the treatment of effects \S\ref{sec:semantics-delayed} that 
+is needed in impure languages.
 
-\vspace{1em}
+\vspace{1.0em}
 \noindent
-We believe that software artifacts in programming language research matter [99], so all examples 
-with implementations can be found and interactively run online: \url{http://tryjoinads.org/computations}. 
-The syntax for applicative functors is a reserch extension; all other examples can be 
-compiled with F\# 2.0 and above.
+We believe that software artifacts in programming language research matter~\cite{artifacts}, so all 
+code can be run at: \url{http://tryjoinads.org/computations}. 
+The syntax for applicative functors is a reserch extension; other examples require F\# 2.0.
 
 % ==================================================================================================
 
 \section{Computation expressions by example}
 \label{sec:intro}
 
-Computation expressions are blocks of code that represent computations with some non-standard 
-aspect such as laziness, asynchronous evaluation, hidden state or other. The code inside the
-block is re-interpreted using a \emph{computation builder}, which is a record of operations that 
-define the computation. It also defines what syntax is available in the block\footnote{The focus 
-of this paper is not on computation expressions alone, but on their relation to well-known 
-abstractions. Readers unfamiliar with F\# may find extended explanation of the mechanism 
-in previous publications [99,9].}.
+Computation expressions are blocks of code that represent computations with a non-standard 
+aspect such as laziness, asynchronicity, state or other. The code inside the block is re-interpreted 
+using a \emph{computation builder}, which is a record of operations that define the semantics,
+but also syntax available in the block.
 
 Computation expressions mirror the standard F\# syntax (let binding, loops, exception handling),
 but support additonal computational constructs. For example \ident{let!} represents computational 
 (monadic) alternative of let binding.
 
-We first introduce the syntax and mapping to the underlying operations, but both are made precise 
-later \S\ref{sec:semantics}. To show the breadth of applications, we look at five examples arising 
-from different abstract computations.
+We first introduce the syntax and mapping to the underlying operations informally, but both are made 
+precise later \S\ref{sec:semantics}. Readers unfamiliar with F\# may find additional explanation
+in previous publications \cite{fsharp-expert,fsharp-spec}. To show the breadth of applications, 
+we look at five examples arising from different abstractions.
 
 % --------------------------------------------------------------------------------------------------
 
 \subsection{Monadic asynchronous workflows}
 \label{sec:intro-async}
 
-Asynchronous workflows [99] allow writing non-blocking I/O using a mechanism based on the 
+Asynchronous workflows \cite{fs-async} allow writing non-blocking I/O using a mechanism based on the 
 \emph{continuation monad} (with error handling etc.) The following example shows F\# version
 with an equivalent C\# code using single-purpose feature:
-%
+
 \begin{equation*}
 \begin{array}{l}
 \kvd{let}~\ident{getLength}~url=\ident{async}~\{\\
@@ -1193,6 +1176,22 @@ is left-associative or right-associative.
 \label{sec:conclusions}
 
 Related work - do notation works for any monad - which makes it more reusable but weaker
+
+By contrast, Haskell ``do" notation or Scala ``for" notation are relatively weak: they are limited
+to a single kind of computation and they do not integrate exception handling or looping.
+
+By contrast, the main computational notations in  Haskell (``do-notation'') and Scala (``flatMap monads``) 
+are relatively weak: for example, they don't integrate with an exception-handling syntax, and they don't support the
+range of computations described in this paper.  The observations in this paper are thus relevant to languages in the spirit of 
+Haskell, Scala, C\#, F\#,  Javascript and Python. All of these have added (and sometimes deprecated) 
+multiple non-trivial syntactic extensions aimed at improved computational expressivity -- queries, iterators, monadic syntax, 
+comprehensions, asynchronous computations, futures, arrows, continuations, reactions -- with 
+widespread impact on mainstream programming as a result. Importantly, the ``syntactic budget'' to support 
+compositional computations in such languages is somewhat limited -- for example, Haskell and 
+its extensions use four notations for  comprehensions, monads, idioms and arrows alone, and both C\# and Scala
+have multiple notational devices for queries, comprehensions, iterators and asynchronous programming. 
+The more ``bang'' we get with one syntactic mechanism, the better. As we show in this paper, computation expressions
+give a lot of ``bang'' for relatively low cost.
 
 % ==================================================================================================
 
