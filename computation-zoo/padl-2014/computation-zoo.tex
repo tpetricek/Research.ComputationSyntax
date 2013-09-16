@@ -81,8 +81,7 @@ Computations with non-standard aspects like non-determinism, effects, asynchroni
 combinations can be captured using a variety of abstract computation types. In Haskell, we write 
 such computations using a mix of combinators and syntactic extensions like monad comprehensions 
 \cite{monad-compre} and ``do'' notation. Languages such as Python and C\# emphasize the syntax 
-and provide single-purpose support e.g. for asynchrony \cite{cs-async} and list generators
-\cite{csharp-iterators}. 
+and provide single-purpose support e.g. for asynchrony \cite{cs-async} and list generators. 
 
 Using such abstractions can be made simpler and more intuitive 
 if we employ a general syntactic machinery. F\# computation expressions provide
@@ -146,7 +145,7 @@ but support additonal computational constructs. For example \ident{let!} represe
 
 We first introduce the syntax and mapping to the underlying operations informally, but both are made 
 precise later \S\ref{sec:semantics}. Readers unfamiliar with F\# may find additional explanation
-in previous publications \cite{fsharp-expert,fsharp-spec}. To show the breadth of applications, 
+in previous publications \cite{fsharp-spec}. To show the breadth of applications, 
 we look at five examples arising from different abstractions.
 
 % --------------------------------------------------------------------------------------------------
@@ -1029,7 +1028,7 @@ option monad or the software transactional memory monad \cite{stm}.
 \subsection{Monad transformers}
 \label{sec:laws-transf}
 
-There are multiple ways of composing or layering monads \cite{monad-transformers,monad-compose}. 
+There are multiple ways of composing or layering monads \cite{monad-transformers,monad-compose,monads-layered}. 
 Monad transformers are perhaps the most widely known technique. A monad transformer is a type 
 constructor $T\,m$ together with a \emph{Lift} operation. For some monad $M$ the operation has 
 a type $M\,\alpha \rightarrow T\,M\,\alpha$ and it turns a computation in the underlying monad 
@@ -1137,27 +1136,45 @@ details of the compiler -- it does not matter whether the parsing of $\binds$ in
 
 \section{Related work}
 
+Haskell and its extensions support monad comprehensions \cite{monad-compose} and ``do'' notation
+for monads, idiom brackets \cite{applicative} for applicatives and arrows \cite{arrows}. 
+These are similar to computation expressions in that they are not tied to concrete computations. 
+However, they differ syntactically -- they add multiple new notations, while computation expressions 
+add a uniform notation resembling standard language structures. Adding arrows to
+computation expressions is an open question.
+
+Python and C\# generators, LINQ \cite{linq} in C\# and ``for'' comprehensions 
+in Scala are just a few examples of syntax for concrete computations. Although they can all be 
+used with other computations, this is not generally considered idiomatic use. Similarly to F\#, 
+the Scala async library \cite{scala-async} supports loops and exception handling. However, it is
+implemented through full macro system.
+
+Aside from monads, other ways of encoding effectful computations include effect handlers
+\cite{effect-handlers} and continuations \cite{monads-layered}. Providing syntactic support for
+these encodings may provide an interesting alternative to our encoding using computation builder.
+Interestingly, our \emph{Run} operation seems related to \emph{reset} of delimited continuations
+\cite{delimcont} and  our \emph{Delay} is similar to the \emph{reify} operation of Filinsky 
+\cite{monads-inaction}.
+
+
+
 % ==================================================================================================
 
 \section{Conclusions}
 \label{sec:conclusions}
 
-In this paper, we revisited F\# \emph{computation expressions} and related them to well-known 
-abstract computation types. Computation expressions provide a unified way for writing a wide range 
-of computations including monoids, monads, applicative formlets and monads composed using monad 
-transformers.
+In this paper, we related F\# \emph{computation expressions} to well-known abstract computation 
+types. Computation expressions provide a unified way for writing a wide range of computations 
+including monoids, monads, applicative formlets and monads composed using monad transformers.
 
-By contrast, Haskell ``do'' notation or Scala ``for'' notation are limited to a single kind of 
-abstraction and to single syntax. Computation expressions follow a different approach -- they 
-integrate a wider range of abstractions and flexibly reuse existing syntax (including loops and 
+Computation expressions follow a different approach than e.g. Haskell ``do'' notation. They
+integrate a wide range of abstractions and flexibly reuse existing syntax (including loops and 
 exception handling). The library developer can choose the appropriate syntax and use laws of
 abstract computations to guarantee that the computation preserves intuition about the syntax.
 
-We believe that such reusable syntactic extensions are becoming increasingly important. As other
-languages keep adding single-purpose hardwired language features for queries, generators, 
-asynchronicity, comprehensions, futures and more, the ``syntactic budget'' is rapidly running out
-and we simply cannot keep adding new features, depending on the current technology trends.
-
+Such reusable syntactic extensions are becoming increasingly important. We cannot keep adding
+new features to support comprehensions, asynchronicity, queries and more as the ``syntactic budget''
+is rapidly running out.
 
 % ==================================================================================================
 
@@ -1171,16 +1188,5 @@ and we simply cannot keep adding new features, depending on the current technolo
 \bibliography{computation-zoo}
 
 
-\end{document}
-
-
-
-
-
-
-
-
-
-
-
+\end{document} 
 
