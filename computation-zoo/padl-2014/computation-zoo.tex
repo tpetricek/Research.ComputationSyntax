@@ -537,8 +537,8 @@ syntax, \binds\; is used to express one or more parallel variable bindings.
 
 For space reasons, we also omit imperative \ident{while} and exception handling 
 constructs, but both of these are an important part of computation expressions. They allow
-taking existing code and wrapping in a computation block to augment it with non-standard
-computational aspect, while preserving the semantics.
+taking existing code and wrapping it in a computation block to augment it with non-standard
+computational aspect.
 
 % --------------------------------------------------------------------------------------------------
 
@@ -723,24 +723,22 @@ respectively).
 \subsection{Translation}
 \label{sec:semantics-transl}
 
-The translation is defined as a mapping $\tsl{-}$ that is parameterized by a variable $m$ which
+The translation is defined as a relation $\tsl{-}$ that is parameterized by a variable $m$ which
 refers to the current instance of a computation builder. This parameter is used 
 to invoke members of the builder, such as $m.\ident{Return}(\ldots)$. Multiple 
 variable bindings are translated using $\tsb{\binds}$ and we define a helper mapping 
 $\tsv{\binds}$ that turns bindings into a simple pattern that can be used to decompose a tuple
 constructed by merging computations using the \emph{Merge} operation.
 
-According to the F\# specification, a particular construct of computation expression syntax is
-allowed only when the static type of the computation builder defines members that are required
-by the translation. It is easy to check that our typing rules guarantee that a well-typed computation
-expression can always be translated to a well-typed F\# expression.
+It is easy to check that our typing guarantees that a well-typed computation expression
+is always be translated to a well-typed F\# expression. The side-conditions ensure that all
+operations are available and have an appropriate type.
 
 Careful readers have already noticed that our definition of $\tsl{-}$ is ambiguous. The 
-\ident{let!} binding followed by \ident{return} can be translated in two different ways. In the
-real implementation, the translation using \emph{Map} is preferred, but we do not specify this in
-the paper. The reason is that the laws in \S\ref{sec:laws-monads} require the two translations to
-be equivalent. For monads, this equivalence is easy to see by considering the definition of
-\emph{Map} in terms of \emph{Bind} and \emph{Return}.
+\ident{let!} binding followed by \ident{return} can be translated in two different ways. 
+We intentionally do not specify the behaviour in this paper -- the laws in \S\ref{sec:laws-monads} 
+require the two translations to be equivalent. For monads, this equivalence is easy to see 
+by considering the definition of \emph{Map} in terms of \emph{Bind} and \emph{Return}.
 
 In earlier discussion, we omitted the \emph{Run} and \emph{Delay} members in the translation of
 $\expr~\{\,\cexpr\,\}$. The next section discusses these two in more details.
@@ -768,7 +766,7 @@ is provided.
 Before going further, we revist the translation of asynchronous workflows using the full set of
 rules to show how \emph{Run} and \emph{Delay} are used. Consider the the following simple computation
 with a corresponding translation:
-
+%
 \begin{equation*}
 \begin{array}{l}
 \kvd{let}~\ident{answer} = \ident{async}~\{\\
@@ -782,14 +780,13 @@ with a corresponding translation:
 \quad \ident{async}.\ident{Return}(42)~))
 \end{array}
 \end{equation*}
-%
+
 For monadic computations such as asynchronous workflows, we do not expect that the defining
 \ident{answer} will print ``Welcome''. This is achieved by the wrapping specified in the 
-translation rule for the $\expr~\{\,\cexpr\,\}$ expression. As already mentioned, the result
-of \emph{Delay} is a 
+translation rule for the $\expr~\{\,\cexpr\,\}$ expression. 
 
 In this case, the result of \emph{Delay} is a computation $A\,\ident{int}$ that encapsulates the
-delayed effect. For monadic containers, the \emph{Run} function is a simple identity -- contrary
+delayed effect. For monadic computations, \emph{Run} is a simple identity -- contrary
 to what the name suggests, it does not run the computation (although that might be an interesting
 use beyond standard abstract computations). The need for \emph{Run} becomes obvious when we look
 at monadic containers.
@@ -820,12 +817,10 @@ Using the same translation rules, \emph{Run}, \emph{Delay} and \emph{Delay} are 
 \hspace{12.8em}     \ident{maybe}.\ident{Return}(a\,/\,b))~)~))
 \end{array}
 \end{equation*}
-
-\noindent
-The key idea is that we do not have to use the type $M\alpha$ for representing delayed computations,
-but can instead use two different types throughout the code. $M\alpha$ for values representing
-evaluated containers and $\unit \rightarrow M\alpha$ for delayed computations. The operations 
-have the following types:
+%
+The key idea is that we can use two different types -- $M\alpha$ for varlues representing
+(evaluated) monadic containers and $\unit \rightarrow M\alpha$ for delayed computations. The 
+operations then have the following types:
 %
 \begin{equation*}
 \begin{array}{lcl}
@@ -839,7 +834,7 @@ Here, the \emph{Delay} operation becomes just an identity that returns the funct
 translation. In the translation, the result of \emph{Delay} can be passed either to \emph{Run}
 or as the second argument of \emph{Delay}, so these need to be changed accordingly. The \emph{Run}
 function now becomes important as it turns the delayed function into a value of the expected
-type $M\alpha$.
+type $M\alpha$ (by applying it).
 
 \vspace{-1em}
 \subsubsection{Unified treatment of effects.} In the typing rules \S\ref{sec:semantics-typing}, 
@@ -850,7 +845,7 @@ it is $\unit \rightarrow M\alpha$. Our typing is even more flexible, as it allow
 multiple different computation types -- but treatment of effects is one example where this
 additional flexibility is necessary.
 
-Finally, it should be noted that we used a slight simplification. The actual F\# implementation 
+Finally, it should be noted that we use a slight simplification. The actual F\# implementation 
 does not strictly require \emph{Run} and \emph{Delay} in the translation of $\expr~\{\,\cexpr\,\}$. 
 They are only used if they are present. 
 
@@ -861,38 +856,32 @@ They are only used if they are present.
 \label{sec:laws}
 
 Although computation expressions are not tied to any specific abstract computation type, we 
-showed that they are usually used with well-known abstractions like monads, monad transofrmers or 
-applicative functors. 
-
+showed that they are usually used with well-known abstractions.
 This means three good things. First, we get better understanding of what computations can be encoded
 (and how). Second, we can add a more precise typing \S\ref{sec:semantics-typing}. Third, we know
 that certain syntactic transformations (refactorings) preserve the meaning of computation. This
 section looks at the last point. 
 
-This section assumes that there are no side-effects and we ignore \emph{Run} and \emph{Delay}.
-These can be added to the picture, but it complicates the presentation.
+To keep the presentation in this section focused, we assume that there are no side-effects 
+and we ignore \emph{Run} and \emph{Delay}.
 
 % --------------------------------------------------------------------------------------------------
 
-\subsection{Monoid and semi-group laws}
+\subsection{Monoid and semigroup laws}
 \label{sec:laws-monoids}
 
-We start by looking at the simplest possible structure. A semigroup $(S, \circ)$ consists of a set
-$S$ and an associative binary operation $\circ$ meaning that $a \circ (b \circ c) = (a \circ b) \circ c$.
-A computation expression corresponding to a semigroup defines only \emph{Combine} (of a type
-$M\alpha \rightarrow M\alpha \rightarrow M\alpha$). To allow appropriate syntax, we also add
+We start from the simplest structures. A semigroup $(S, \circ)$ consists of a set
+$S$ and a binary operation $\circ$ such that $a \circ (b \circ c) = (a \circ b) \circ c$.
+A computation expression corresponding to a semigroup defines only \emph{Combine} (of type
+$M\alpha \times M\alpha \rightarrow M\alpha$). To allow appropriate syntax, we also add
 \emph{YieldFrom} which is just the identity function. The associativity implies the following
 syntactic equivalence:
 %
 \begin{equation*}
 \ident{m}~\{~\cexpr_1; \,\cexpr_2; \,\cexpr_3 ~\} ~\equiv~
-  \ident{m}~\{~\kvd{yield!}~\ident{m}~\{ \cexpr_1; \,\cexpr_2; \}; \,\cexpr_3 ~\}
+  \ident{m}~\{~\kvd{yield!}~\ident{m}~\{ \cexpr_1; \,\cexpr_2 ~\}; \,\cexpr_3 ~\}
 \end{equation*}
-
-\noindent
-For semigroups, the syntax is rather limited, but given a value $x$ of type $M\tau$ it is possible
-to write $\ident{yield!}~x$ to return the value. 
-
+%
 A monoid $(S, \circ, \epsilon)$ is a semigroup $(S, \circ)$ with an identity element $\epsilon$ meaning 
 that for all values $a\in S$ it holds that $\epsilon \circ a = a = a \circ \epsilon$. The identity
 element can be added to computation builder as the \emph{Zero} member. This operation is used when
@@ -919,16 +908,14 @@ up to 100:
 %
 \begin{equation*}
 \begin{array}{l}
-\kvd{let}~\kvd{rec}~\ident{range}~n = \\
-\quad \ident{seq}~\{~ \kvd{yield}~n\\
-\hspace{3.7em} \kvd{if}~n < 100~\kvd{then}~\kvd{yield!}~\ident{range}~(n + 1)~\}
+\kvd{let}~\kvd{rec}~\ident{range}~n =  \ident{seq}~\{~ \kvd{yield}~n\\
+\hspace{10.3em} \kvd{if}~n < 100~\kvd{then}~\kvd{yield!}~\ident{range}~(n + 1)~\}
 \end{array}
 \end{equation*}
 %
-Here, we can see that when $n=100$, the body is equivalent to just $\ident{m}~\{~\ident{yield}~100~\}$.
-Indeed, this is an expected property of the \ident{if} construct -- the law guarantees that the 
-property holds even for an \ident{if} construct that is reinterpreted by some (monoidal) computation
-expression.
+The law guarantees that for $n=100$, the body is equivalent to $\ident{m}~\{~\ident{yield}~100~\}$.
+This is an expected property of the \ident{if} construct -- the law guarantees that it holds even 
+for \ident{if} that is reinterpreted by some (monoidal) computation expression.
 
 % --------------------------------------------------------------------------------------------------
 
@@ -953,12 +940,9 @@ not significantly differ from the laws about Haskell's do notation:
 \equiv&\ident{m}~\{~ \kvd{let!}~y=c~\kvd{in}~\kvd{let!}~x=\ident{m}~\{~\cexpr_1~\}~\kvd{in}~\cexpr_2~\}\\
 \end{array}
 \end{equation*}
-%
-However, there is more to be said about the \emph{Map} operation in the translation and
-about laws of additive monads (\ident{MonadPlus} typeclass in Haskell).
 
 \vspace{-1em}
-\subsubsection{Alternative translations.} When discussing the translation rules 
+\subsubsection{Resolving ambiguity.} When discussing the translation rules 
 \S\ref{sec:semantics-transl}, we noted that the rules are ambiguous when both \emph{Map} and
 \emph{Bind} operations are present. The following can be translated both monadically and 
 applicatively:
@@ -981,13 +965,12 @@ produce equivalent computations.
 
 \subsubsection{Additive monads.} Additive monads are computations that combine monad with 
 the monoidal structure. As shown earlier \S\ref{sec:intro-seq-parsers}, these can be embedded
-using \ident{let!}/\ident{return} or using \ident{for}/\ident{yield} (depending on which 
-aspect is ``more important'').
+using \ident{let!}/\ident{return} or using \ident{for}/\ident{yield}. The choice can be made
+based on the laws that hold.
 
-The set of laws required for such computations is not fully resolved [99]. A more generally 
-accepted law is \emph{left distributivity} -- applying monoidal operation and then binding is equivalent
-to binding on two computations and then combining the results. In terms of computation builder
-operations:
+The laws required for additive monads is not fully resolved \cite{monadplus}. A frequently advocated
+law is \emph{left distributivity} -- binding on the result of a monoidal operation is equivalent 
+to binding on two computations and then combining the results:
 %
 \begin{equation*}
 \ident{m}.\ident{For}(\ident{m}.\ident{Combine}(a, b), f)
@@ -1037,32 +1020,32 @@ corresponds to the following syntactic equivalence:
 \end{array}
 \end{equation*}
 %
-The fact that \emph{left distributivity} corresponds to an intuitive syntactic equality
-about \ident{for}/\ident{yield} while \emph{left catch} corresponds to a syntactic equality
-about \ident{let!}/\ident{return} provides a useful guidance for choosing between the two
-syntactic options. The former is appropriate for list comprehensions (and other collections), 
-while the latter is appropriate for example for the left-biased option (Maybe) monad, imperative 
-computations [99] or software transactional memory.
+The fact that \emph{left catch} corresponds to an intuitive syntactic equality about 
+\ident{let!}/\ident{return} while \emph{left distributivity} corresponds to an intuitive syntactic equality
+about \ident{for}/\ident{yield} determines the appropriate syntax. The former can be used
+for list comprehensions (and other collections), while the latter is suitable e.g. for the 
+option monad or the software transactional memory monad \cite{stm}.
 
 \subsection{Monad transformers}
 \label{sec:laws-transf}
 
-There are multiple ways of composing or layering monads [99, 98]. Monad transformers are perhaps 
-the most widely known technique. A monad transformer is a type constructor $T\,m$ together with
-a \emph{Lift} operation. For some monad $M$ the operation has a type $M\,\alpha \rightarrow T\,M\,\alpha$.
-and it turns a computation in the underlying monad into a computation in the composed monad.
+There are multiple ways of composing or layering monads \cite{monad-transformers,monad-compose}. 
+Monad transformers are perhaps the most widely known technique. A monad transformer is a type 
+constructor $T\,m$ together with a \emph{Lift} operation. For some monad $M$ the operation has 
+a type $M\,\alpha \rightarrow T\,M\,\alpha$ and it turns a computation in the underlying monad 
+into a computation in the composed monad.
 
 The result of monad transformer is also a monad. This means that we can use the usual syntactic 
 sugar for monads, such as the do notation in Haskell. However, a more specific notation can
 use the additional \emph{Lift} operation.
 
-We demonstrated encoding of syntax for composed monads when discussing
+We looked at computation expression for a composed monad when discussing
 asynchronous sequences \S\ref{sec:intro-asyncseq}. An asynchronous sequence $\ident{AsyncSeq}\,\alpha$ 
-is a computation obtained by applying the list monad transformer [97] to the asynchronous
-workflow $\ident{Async}\,\alpha$ monad. Asynchronous sequences are \emph{additive monads} satisfying 
+is a computation obtained by applying the list monad transformer \cite{list-trans} to the 
+monad $\ident{Async}\,\alpha$. Asynchronous sequences are \emph{additive monads} satisfying 
 the left distributivity law, so we choose the \ident{for}/\ident{yield} syntax for working with 
 the composed computation. We also provided an additional \emph{Bind} operation to support 
-awaiting a single asynchronous workflow using the \ident{let!} construct. This operation is
+awaiting a single asynchronous workflow using \ident{let!} This operation is
 defined in terms of \emph{Lift} of the monad transformer and \emph{For} (monadic bind) of the
 composed computation:
 %
@@ -1070,15 +1053,14 @@ composed computation:
 \ident{asyncSeq}.\ident{Bind}(a, f) = \ident{asyncSeq}.\ident{For}(\ident{asyncSeq}.\ident{Lift}(a), f)
 \end{equation*}
 %
-There are two laws that hold about monad transforers. To avoid confusion, we use asynchronous 
-workflows and sequences in the explanation, but we could easily generalize. The first law states 
+There are two laws that hold about monad transforers. To simplify the presentation, we use asynchronous 
+workflows and sequences rather than showing the generalised version. The first law states 
 that composing \emph{Return} of asynchronous workflows with \emph{Lift} should be equivalent to the 
 \emph{Yield} of asynchronous sequences. The other states that \emph{Lift} distributes over monadic
 bind. 
 
-Our syntax always combines \emph{Lift} with \emph{For} and so there are multiple syntactic 
-equivalences that follow from the laws. The following are the most direct (the first one also
-relies on right identity for monads):
+Our syntax always combines \emph{Lift} with \emph{For}, so the following syntactic equivalences
+also require right identity for monads and function extensionality:
 %
 \begin{equation*}
 \begin{array}{c}
@@ -1090,11 +1072,11 @@ relies on right identity for monads):
 \end{array}
 \end{equation*}
 %
-The first equation returns the value $v$ without any asynchronous waiting in both cases
+The first equation returns $v$ without any asynchronous waiting in both cases
 (although, in presence of side-effects, this is made more complicated by cancellation). 
 The second equation is more subtle. The left-hand side awaits a single asynchronous workflow 
 that first awaits $c$ and then does more work. The right-hand side awaits $c$ lifted to an 
-asynchronous sequence and then awaits the rest (again, lifted into an asynchronous sequence).
+asynchronous sequence and then awaits the rest.
 
 % --------------------------------------------------------------------------------------------------
 
@@ -1102,14 +1084,13 @@ asynchronous sequence and then awaits the rest (again, lifted into an asynchrono
 \label{sec:laws-appl}
 
 The last type of computations that we discussed \S\ref{sec:intro-formlets} is \emph{applicative functor}.
-We use the less common definition (called \ident{Monoidal} by McBride and Paterson [99]). The 
-definition consists of \emph{Map} and \emph{Merge} operations, together with a unit computation.
-We use the unit to define \emph{Zero} -- in the translation it will only be used in computations that 
-contain some unit-returning expression, such as $()$.
+We use the less common definition called \ident{Monoidal} \cite{applicative}. It consists of \emph{Map} 
+and \emph{Merge}, together with a unit computation. We use the unit to define \emph{Zero} -- it will be 
+used in computations that contain some unit-returning expression, such as $()$.
 
 The identity law guarantees that merging with a unit and then projecting the non-unit value
 produces an equivalent computation:
-%
+
 \begin{equation*}
 \begin{array}{l}
 \ident{f}~\{~  \kvd{let!}~x = \ident{f}~\{~()~\}\\
@@ -1125,7 +1106,7 @@ produces an equivalent computation:
 \end{equation*}
 %
 The naturality law specifies that \emph{Merge} distributes over \emph{Map}, which translates to
-the following equivalence (assuming $x_1$ not free in $\expr_2$ and vice versa):
+the following code (assuming $x_1$ not free in $\expr_2$ and $x_2$ not free in $\expr_1$):
 %
 \begin{equation*}
 \begin{array}{c}
@@ -1141,18 +1122,21 @@ the following equivalence (assuming $x_1$ not free in $\expr_2$ and vice versa):
 \end{array}
 \end{array}
 \end{equation*}
-
+%
 As with the earlier syntactic rules, we can leave out the non-standard aspect
-of the computations and read them as ordinary functional code and get correct and 
+of the computations, read them as ordinary functional code and get correct and 
 expected laws. This means that the laws, again, guarantee that intuition about the
 syntax used by computation expressions will be correct.
 
 Finally, the \emph{Merge} operation is also required to be associative -- this does not have
 any corresponding syntax, but it means that the user does not need to know implementation
-details of the compiler -- it does not matter whether \ident{let!}\ldots\ident{and}\ldots\,
-is left-associative or right-associative.
+details of the compiler -- it does not matter whether the parsing of $\binds$ in 
+\ident{let!}\ldots\ident{and}\ldots\ is left-associative or right-associative.
 
-\newpage
+% ==================================================================================================
+
+\section{Related work}
+
 % ==================================================================================================
 
 \section{Conclusions}
