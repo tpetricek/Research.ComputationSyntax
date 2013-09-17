@@ -140,7 +140,7 @@ using a \emph{computation builder}, which is a record of operations that define 
 but also syntax available in the block.
 
 Computation expressions mirror the standard F\# syntax (let binding, loops, exception handling),
-but support additonal computational constructs. For example \ident{let!} represents computational 
+but support additonal computational constructs. For example \ident{let!} represents the computational 
 (monadic) alternative of let binding.
 
 We first introduce the syntax and mapping to the underlying operations informally, but both are made 
@@ -299,7 +299,7 @@ expression mechanism needs certain flexibility -- the translation is the same, b
 
 \subsubsection{List comprehensions.} Although list comprehensions implement the same abstract type
 as parsers, it is desirable to use different syntax if we want to make the syntactic sugar comparable to 
-built-in features in other languages. The following shows F\# list comprehension and Python generator
+sbuilt-in features in other languages. The following shows an F\# list comprehension and a Python generator
 side-by-side:
 
 \begin{equation*}
@@ -369,7 +369,7 @@ follow the list monad transformer \cite{list-trans} and define the type as:
 \end{array}
 \end{equation*}
 %
-When given a continuation, asynchronous sequence calls it with either \ident{AsyncNil}
+When given a continuation, an asynchronous sequence calls it with either \ident{AsyncNil}
 (the end of the sequence) or with \ident{AsyncCons} that carries a value together with
 the tail of the asynchronous sequence. The flexibility of computation expression 
 makes it possible to provide an elegant syntax for writing such computations:
@@ -434,8 +434,8 @@ computation expression syntax.
 
 \emph{Applicative functors} \cite{applicative,idioms-obliv} are weaker (and thus more common) 
 abstraction than monads. The difference between applicative and monadic computations is that 
-monadic computation can perform different effects depending on values obtained earlier during the 
-computation. On the other hand, the effects of applicative computation are fully determined 
+a monadic computation can perform different effects depending on values obtained earlier during the 
+computation. On the other hand, the effects of an applicative computation are fully determined 
 by its structure. 
 
 In other words, it is not possible to choose which computation to run (using \ident{let!} or 
