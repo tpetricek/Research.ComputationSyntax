@@ -15,7 +15,7 @@
 
 \begin{document}
 
-\title{The F\# Computation Expressions Zoo}
+\title{The F\# Computation Expression Zoo}
 \author{Tomas Petricek\inst{1} \and Don Syme\inst{2}}
 \institute{University of Cambridge, UK\and Microsoft Research Cambridge, UK \\
 \textsf{tp322@cam.ac.uk}, \textsf{dsyme@microsoft.com}}
@@ -55,22 +55,22 @@
 % ==================================================================================================
 
 \begin{abstract}
-Many computations can be structured using abstract types such as monoids, monad transformers or 
+Program logic can often be structured using abstract computation types such as monoids, monad transformers or 
 applicative functors. Functional programmers use those abstractions directly while main-stream
 languages often integrate concrete instances as language features -- e.g. generators in Python
-or asynchronous computations in C\# 5.0. The question is, is there a sweet spot between a series of
-convenient, hardwired language features, and an inconvenient but flexible set of libraries?
+or asynchronous computations in C\# 5.0. The question is, is there a sweet spot between 
+convenient, hardwired language features, and an inconvenient but flexible libraries?
 
 \quad F\# \emph{computation expressions} answer this question in the affirmative. Unlike 
 the ``do'' notation in Haskell, computation expressions are not tied to a single kind of abstraction.
-They support a wide range of computations, depending on what operations are available. They also 
-provide greater syntactic flexibility leading to a more intuitive syntax, without resorting to 
+They support a wide range of abstractions, depending on what operations are available. F\# also 
+provides greater syntactic flexibility leading to a more intuitive syntax, without resorting to 
 full macro-based meta-programming. 
 
-\quad We show that computation expressions can structure well-known computations including monoidal 
-list comprehensions, monadic parsers, applicative formlets and asynchronous sequences based on the 
-list monad transformer. We also present typing rules for computation expressions that are capable of 
-capturing all these applications. 
+\quad We present computation expressions in a principled way, developing a type system that captures 
+the semantics of the calculus. We demonstrate how computation expressions 
+structure well-known abstractions including monoidal list comprehensions, monadic parsers, 
+applicative formlets and asynchronous sequences based on monad transformers. 
 
 \end{abstract}
 
@@ -102,26 +102,27 @@ low cost -- notably, without resorting to full-blown macros.
 
 Some of the technical aspects of the feature have been described before\footnote{F\# 3.0 extends the 
 mechanism further to accomodate extensible query syntax. To keep this paper focused, we leave analysis 
-of these extensions to future work.} \cite{fsharp-spec}, but this paper is novel in that it relates the mechanism to 
-a range of well-known abstract computations. We also present new typing rules based on those uses.
+of these extensions to future work.} \cite{fsharp-spec}, but this paper is novel in that it 
+uses more principled approach by developing a new type system and relating the mechanism to
+well-known abstractions.
 
 \vspace{-1em}
 \subsubsection{Practical examples.} 
 We demonstrate the breadth of computations that can be structured using F\# computation expressions.
-The applications include asynchronous workflows and sequences \S\ref{sec:intro-async}, 
-\S\ref{sec:intro-asyncseq}, list comprehensions and monadic parsers \S\ref{sec:intro-seq-parsers}
-and formlets for web programming \S\ref{sec:intro-formlets}.
+The applications include asynchronous workflows and sequences (\S\ref{sec:intro-async}, 
+\S\ref{sec:intro-asyncseq}), list comprehensions and monadic parsers (\S\ref{sec:intro-seq-parsers})
+and formlets for web programming (\S\ref{sec:intro-formlets}).
 
 \vspace{-1em}
 \subsubsection{Abstract computations.} We show that the above examples fit well-known types
 of abstract computations, including additive monads and monad transformers, and we show that 
-important syntactic equalities hold as a result \S\ref{sec:laws}.
+important syntactic equalities hold as a result (\S\ref{sec:laws}).
 
 \vspace{-1em}
 \subsubsection{Syntax and typing.} We give typing rules that capture idiomatic uses of computation
-expressions \S\ref{sec:semantics-typing}, extend the translation to support applicative functors 
-\S\ref{sec:intro-formlets} and discuss the treatment of effects \S\ref{sec:semantics-delayed} that 
-is needed in impure languages.
+expressions (\S\ref{sec:semantics-typing}), extend the translation to support applicative functors 
+(\S\ref{sec:intro-formlets}) and discuss the treatment of effects (\S\ref{sec:semantics-delayed}) 
+needed in impure languages.
 
 \vspace{1.0em}
 \noindent
@@ -144,7 +145,7 @@ but support additonal computational constructs. For example \ident{let!} represe
 (monadic) alternative of let binding.
 
 We first introduce the syntax and mapping to the underlying operations informally, but both are made 
-precise later \S\ref{sec:semantics}. Readers unfamiliar with F\# may find additional explanation
+precise later (\S\ref{sec:semantics}). Readers unfamiliar with F\# may find additional explanation
 in previous publications \cite{fsharp-spec}. To show the breadth of applications, 
 we look at five examples arising from different abstractions.
 
@@ -178,12 +179,12 @@ Both functions return a computation that expects a \emph{continuation} and then 
 URL, waits one second and passes content length to the continuation. The C\# version uses the built-in
 $\ident{await}$ keyword to represent non-blocking waiting. In F\#, the computation is enclosed
 in the $\ident{async}~\{ \ldots \}$ block, where \ident{async} is an identifier that refers to
-the computation builder. 
+a library-defined computation builder. 
 
-Depending on the operations provided by the builder, different pre-defined keywords are allowed
-in the computation block. The \ident{let!} keyword represents (monadic) composition and requires 
-the \emph{Bind} operation. This operation also enables the \ident{do!} keyword which is equivalent 
-to using \ident{let!} on an unit-returning computation. Finally, the \ident{return} keyword is 
+The computation builder \ident{async} is an F\# object with instance members such as \emph{async.Bind}.
+The members determine which of the pre-defined keywords are allowed -- e.g. \emph{Bind} member
+enables \ident{let!} which represents (monadic) binding. \emph{Bind} also enables the \ident{do!}~\emph{e} 
+expression, which is a shortcut for \ident{let!}~$()=e$. Finally, the \ident{return} keyword is 
 mapped to the \emph{Return} operation:
 %
 \begin{equation*}
@@ -194,35 +195,37 @@ mapped to the \emph{Return} operation:
 \end{array}
 \end{equation*}
 %
-The two operations form a monad and have the standard types: $\emph{Return}$ has a type $\alpha \rightarrow A\alpha$ 
+The \emph{Bind} and \emph{Return} operations form a monad. As usual, $\emph{Return}$ has a type $\alpha \rightarrow A\alpha$ 
 and the required type of $\emph{Bind}$ is $A\alpha \times (\alpha \rightarrow A\beta) \rightarrow A\beta$ 
 (we write $\alpha, \beta$ for universally qualified type variables and $\tau$ as for concrete types)
 \footnote{For the purpose of this paper, we write type application using a light notation $T\tau$. }.
 
 \vspace{-1em}
-\subsubsection{Sequencing and effects.} Effectful expressions in F\# return \ident{unit}.
-Assuming $e_1$ returns \ident{unit}, we can sequence expression using $e_1; e_2$. We can also
-write effectful \ident{if} condition without the \ident{else} clause (which implicitly returns
-the unit value in the \ident{false} case). Both have an equivalent in the computation expression syntax:
+\subsubsection{Sequencing and effects.} Effectful expressions in F\# return a value $()$ which
+is the only value of type \ident{unit}. Assuming $e_1$ has a type \ident{unit}, we can sequence 
+expression using $e_1; e_2$. We can also write effectful \ident{if} condition without the \ident{else} 
+clause (which implicitly returns the unit value $()$ in the \ident{false} case). Both have an 
+equivalent computation expression syntax:
 %
 \begin{equation*}
 \begin{array}{l}
-\ident{async}~\{~ \kvd{if}~delay~\ident{then}~\kvd{do!}~\ident{Async}.\ident{Sleep}(1000)\\
+\ident{async}~\{~ \kvd{if}~delay~\kvd{then}~\kvd{do!}~\ident{Async}.\ident{Sleep}(1000)\\
 \hspace{3.4em}     \ident{printfn}~ \texttt{"Starting..."}\\
 \hspace{3.4em}     \kvd{return!}~ \ident{asyncFetch}(url) ~\}
 \end{array}
 \end{equation*}
 %
-If $delay$ is true, the workflow waits one second before downloading page and returning it.
-The translation uses additional operations --\emph{Zero} represents monadic unit value,
+If $delay$ is true, the workflow waits one second before downloading the page and returning it.
+The translation uses additional operations -- \emph{Zero} represents monadic unit value,
 \emph{Combine} corresponds to the ``;'' operator and \emph{Delay} embeds an effectful expression
 in a (delayed) computation. For monads, these can be defined in terms of \emph{Bind} and \emph{Return},
-but this is not the case for all computations \S\ref{sec:intro-seq-parsers}.
+but this is not the case for all computations (e.g. monoidal computations discussed in
+\S\ref{sec:intro-seq-parsers} require different definitions).
 
 We also use the \ident{return!} keyword, which returns the result of a computation and requires
 an operation \emph{ReturnFrom} of type $A\alpha \rightarrow A\alpha$. This is typically
 implemented as an identity function -- its main purpose is to enable the \ident{return!} keyword in 
-the syntax, as this may not be alway desirable \S\ref{sec:intro-seq-parsers}.
+the syntax, as this may not be alway desirable.
 
 \begin{equation*}
 \begin{array}{l}
@@ -249,7 +252,7 @@ the effects before the first part of sequential computation is run.
 \subsection{Additive parsers and list comprehensions}
 \label{sec:intro-seq-parsers}
 
-Parsers \cite{monad-parsing} or list comprehensions differ in that they may return multiple values.
+Parsers or list comprehensions differ in that they may return multiple values.
 Such computations can be structured using additive monads (\ident{MonadPlus} in 
 Haskell). These abstractions can be used with F\# computation expressions too. Interestingly, they 
 require different typing of \emph{Zero} and \emph{Combine}. 
@@ -288,20 +291,21 @@ list. This is achieved using the \emph{Combine} operation:
 \end{equation*}
 %
 Here, \emph{Combine} represents the monoidal operation on parsers (either left-biassed or
-non-deterministic choice) and it has a type $P\alpha \times P\alpha \rightarrow P\alpha$. Accordingly,
+non-deterministic choice) and has the type $P\alpha \times P\alpha \rightarrow P\alpha$. Accordingly,
 the \emph{Zero} operations is the unit of the monoid. It has a type $\ident{unit}\rightarrow P\alpha$,
 representing a parser that returns no $\alpha$ values (rather than returning a single $\unit$ value).
 
-For effectful sequencing of monads, it only makes sense to use unit-returning values in the left-hand
-side of \emph{Combine} and as the result of \emph{Zero}. However, if a computation supports the monoidal
-interface, it can combine multiple returned values. This shows that the computation 
+For effectful sequencing of monads, it only makes sense to use unit-returning computations in the left-hand
+side of \emph{Combine} and as the result of \emph{Zero}. However, if we have a monoidal computation, we
+can define \emph{Combine} that combines multiple produced values. This shows that the computation 
 expression mechanism needs certain flexibility -- the translation is the same, but the typing differs.
 
 \subsubsection{List comprehensions.} Although list comprehensions implement the same abstract type
 as parsers, it is desirable to use different syntax if we want to make the syntactic sugar comparable to 
-sbuilt-in features in other languages. The following shows an F\# list comprehension and a Python generator
+built-in features in other languages. The following shows an F\# list comprehension and a Python generator
 side-by-side:
 
+\vspace{-0.2em}
 \begin{equation*}
 \hspace{-2em}
 \begin{array}{l}
@@ -315,6 +319,7 @@ side-by-side:
 \quad \kvd{yield}~n          \\
 \quad \kvd{yield}~n*10
 \end{array}
+\vspace{-0.2em}
 \end{equation*}
 %
 The computations iterate over a source list and produce two results for each input. 
@@ -322,17 +327,20 @@ Monad comprehensions \cite{monad-compre} allow us to write $[\;n*10\;|\;n\leftar
 to multiply all elements by 10, but they are not expressive enough to capture the duplication. 
 Doing that requires rewriting the code using combinators.
 
-Although the F\# syntax looks different to what we have seen so far, it is actually very
-similar. The \ident{for} and \ident{yield} constructs are translated to \emph{For} and 
-\emph{Yield} operations which have the same form as \emph{Bind} and \emph{Return}, but provide
-backing for a different syntax. The translation looks as follows:
+The F\# syntax works similarly to what we have seen for monads. The \ident{for} and \ident{yield} 
+constructs are translated to \emph{For} and \emph{Yield} operations which have the same types as \
+emph{Bind} and \emph{Return}, but provide backing for a different syntax (each keyword 
+is mapped to a specific named operation of the builder e.g. \ident{for} uses \emph{seq.For},
+so the members defined by \emph{seq} determine which keywords are enabled):
 %
+\vspace{-0.15em}
 \begin{equation*}
 \begin{array}{l}
 \ident{seq}.\ident{For}(list, \kvd{fun}~() \rightarrow \\
 \quad \ident{seq}.\ident{Combine}(\ident{seq}.\ident{Yield}(n), \ident{seq}.\ident{Delay}(\kvd{fun}~() \rightarrow 
    \ident{seq}.\ident{Yield}(n * 10)))~)
 \end{array}
+\vspace{-0.05em}
 \end{equation*}
 %
 \emph{Combine} concatenates multiple results and has the standard monoidal type
@@ -344,7 +352,7 @@ syntax that requires users to write \ident{let!} for iteration and \ident{return
 
 As the Python comparison shows, the flexibility of computation expressions means that they
 are often close to a built-in syntax. The author of a concrete computation (\ident{parse}, 
-\ident{seq}, \ident{async}, \ldots) decides what syntax is appropriate. For additive monads,
+\ident{seq}, \ident{async}, \ldots) chooses the appropriate syntax. For additive monads,
 the choice can be made based on the laws that hold \S\ref{sec:laws-monads}.
 
 % --------------------------------------------------------------------------------------------------
@@ -361,16 +369,18 @@ execution with the ability to return multiple results -- a file download can the
 in 1kB buffers as they become available. Using $\ident{Async}\,\tau$ as the base type, we can
 follow the list monad transformer \cite{list-trans} and define the type as:
 %
+\vspace{-0.20em}
 \begin{equation*}
 \begin{array}{lcl}
 \kvd{type}~\ident{AsyncSeqInner}\,\tau &~=~& \ident{AsyncNil} ~|~
     \ident{AsyncCons}~\kvd{of}~\tau \times \ident{Async}\,\tau \\
 \kvd{type}~\ident{AsyncSeq}\,\tau &=& \ident{Async}\,(\ident{AsyncSeqInner}\,\tau)
 \end{array}
+\vspace{-0.20em}
 \end{equation*}
 %
-When given a continuation, an asynchronous sequence calls it with either \ident{AsyncNil}
-(the end of the sequence) or with \ident{AsyncCons} that carries a value together with
+When given a continuation, an asynchronous sequence calls it with either the end of the 
+sequence \ident{AsyncNil} or with \ident{AsyncCons} that carries a value together with
 the tail of the asynchronous sequence. The flexibility of computation expression 
 makes it possible to provide an elegant syntax for writing such computations:
 
@@ -414,18 +424,18 @@ F\# computation expressions allow us to do better. We can define both \ident{For
 \end{equation*}
 %
 We omit the translation of the above example -- it is a straightforward variation on what we have 
-seen so far. A more important point is that we can again benefit from the fact that operations
-of the computation builder are not restricted to a specific type (such as \emph{Bind} to represent
-binding on some monad $M$).
+seen so far. A more important point is that we use the fact that operations
+of the computation builder are not restricted to a specific type (the above \emph{Bind} 
+is not an ordinary binding making \ident{let!} behave differently).
 
-As previously, the choice of the syntax is left to the author of the computation. Here, asynchronous
+As previously, the choice of the syntax is left to the author of the computation. Asynchronous
 sequences are an additive monad and so we use \ident{for}/\ident{yield}. Underlying
 asynchronous workflows are just monads, so it makes sense to add \ident{let!} that automatically
 lifts a workflow to an asynchronous sequence.
 
 An important aspect of the fact that asynchronous sequences can be described using a monad
-transformer is that certain laws hold. In \S\ref{sec:laws-transf} we show how these map to the 
-computation expression syntax.
+transformer is that certain laws hold. We discuss how these map to the computation expression syntax
+later (\S\ref{sec:laws-transf}).
 
 % --------------------------------------------------------------------------------------------------
 
@@ -435,7 +445,7 @@ computation expression syntax.
 \emph{Applicative functors} \cite{applicative,idioms-obliv} are weaker (and thus more common) 
 abstraction than monads. The difference between applicative and monadic computations is that 
 a monadic computation can perform different effects depending on values obtained earlier during the 
-computation. On the other hand, the effects of an applicative computation are fully determined 
+computation. Conversely, the effects of an applicative computation are fully determined 
 by its structure. 
 
 In other words, it is not possible to choose which computation to run (using \ident{let!} or 
@@ -456,11 +466,11 @@ In the processing phase, the values of \emph{name} and \emph{gender} are availab
 calculate the result of the form.
 
 The structure of the form needs to be known without having access to specific values. The syntax
-uses parallel binding (\kvd{let!}\ldots\kvd{and}\ldots), which binds a fixed number of independent
+uses parallel binding (\ident{let!}\ldots\ident{and}\ldots), which binds a fixed number of independent
 computations. The rest of the computation cannot contain other (applicative) bindings.
 
 There are two equivalent definitions of applicative functors. We need two~operations known
-from the less common style. \emph{Merge} of type $F\alpha \times F\beta \rightarrow F(\alpha\times\beta)$
+from the less common definition. \emph{Merge} of type $F\alpha \times F\beta \rightarrow F(\alpha\times\beta)$
 represents composition of the structure (without considering specific values) and \emph{Map} of 
 type $F\alpha \times (\alpha \rightarrow \beta) \rightarrow F\beta$ transforms the (pure) value.
 The computation expression from the previous example is translated as follows:
@@ -497,9 +507,9 @@ mechanism. They are desugared before type-checking, which is then performed on t
 using standard F\# typing rules. Similarly to Haskell's rebindable syntax, but to a greater level, 
 this provides flexibility that allows the users to invent previously unforseen abstractions.
 
-In this paper, we relate computation expressions to standard abstract computation types. In this
-section, we present new typing rules that capture such common uses and make the system more robust 
-by supporting better error messages and disallowing uncommon (likely erroneous) uses.
+The purely syntactic approach allows more experimentation, but does not disallow erroneous uses.
+In this section, we present new typing rules that capture such common uses and make the system more 
+robust. Aside from guaranteeing idiomatic use of computation expressions, it also enables better error messages.
 
 % --------------------------------------------------------------------------------------------------
 
@@ -511,7 +521,7 @@ lists all important constructs that we consider in this paper:
 %
 \begin{equation*}
 \begin{array}{lclcl}
-\expr  &=& \expr ~\{~ \cexpr ~\}                       &\quad&\textnormal{(computation expression)}\\
+\expr  &=& \ldots ~|~ \expr ~\{~ \cexpr ~\}            &\quad&\textnormal{(computation expression)}\\
 \binds &=& v=\expr                                          &&\textnormal{(single binding)}\\
        &|& v=\expr ~\kvd{and}~\binds                        &&\textnormal{(parallel binding)}\\
 \end{array}
@@ -531,7 +541,7 @@ lists all important constructs that we consider in this paper:
 \end{array}
 \end{equation*}
 %
-We omit \ident{do!} which can be easily expressed using \ident{let!} To accommodate the applicative 
+We omit \ident{do!} which is easily expressed using \ident{let!} To accommodate the applicative 
 syntax, \binds\; is used to express one or more parallel variable bindings. 
 
 For space reasons, we also omit imperative \ident{while} and exception handling 
@@ -668,19 +678,18 @@ In most of the side-conditions, the functions are universally quantified over th
 (written as $\alpha, \beta$). This captures the fact that computation should not restrict the 
 values that users can work with. However, this is not the case in the rules (\emph{seq}) and 
 (\emph{zero}). Here, we can only require that a specific instantiation is available -- the reason 
-is that these operations may be used in two different ways. As discussed in \S\ref{sec:intro-async}, 
+is that these operations may be used in two different ways. As discussed earlier (\S\ref{sec:intro-async}), 
 for monads the result of \emph{Zero} and the first argument of \emph{Combine} are restricted to
 $M\,\ident{unit}$. They can be universally quantified only if the computation is monoidal 
-\S\ref{sec:intro-seq-parsers}.
+(\S\ref{sec:intro-seq-parsers}).
 
 Another notable aspect of the typing is that a single computation expression may use multiple
 computation types (written $M, N, L$ and $D$). In \emph{Bind} and \emph{For}, the type of bound
 argument is $M$, but the resulting computation is $N$ (we require that bind returns the same
 type of computation as the one produced by the function). This corresponds to the typing used
-by computations arising from monad transformers \S\ref{sec:intro-asyncseq}. Although combining
+by computations arising from monad transformers (\S\ref{sec:intro-asyncseq}). Although combining
 multiple computation types is not as frequent, computations often have a delayed version which
-we write as $D$. This is an important consideration for impure langauges such as F\# 
-\S\ref{sec:semantics-delayed}.
+we write as $D$. This is an important consideration for impure langauges (\S\ref{sec:semantics-delayed}).
 
 Finally, we omitted typing for \ident{yield} and \ident{yield!} because it is similar to the 
 typing of \ident{return} and \ident{return!} (using \emph{Yield} and \emph{YieldFrom} operations,
@@ -724,18 +733,18 @@ respectively).
 
 The translation is defined as a relation $\tsl{-}$ that is parameterized by a variable $m$ which
 refers to the current instance of a computation builder. This parameter is used 
-to invoke members of the builder, such as $m.\ident{Return}(\ldots)$. Multiple 
+to invoke members of the builder, such as $m.\emph{Return}(\ldots)$. Multiple 
 variable bindings are translated using $\tsb{\binds}$ and we define a helper mapping 
-$\tsv{\binds}$ that turns bindings into a simple pattern that can be used to decompose a tuple
+$\tsv{\binds}$ that turns bindings into a pattern that can be used to decompose a tuple
 constructed by merging computations using the \emph{Merge} operation.
 
-It is easy to check that our typing guarantees that a well-typed computation expression
-is always be translated to a well-typed F\# expression. The side-conditions ensure that all
+As can be easily checked, our typing guarantees that a well-typed computation expression
+is always translated to a well-typed F\# expression. The side-conditions ensure that all
 operations are available and have an appropriate type.
 
-Careful readers have already noticed that our definition of $\tsl{-}$ is ambiguous. The 
+Some readers have already noticed that our definition of $\tsl{-}$ is ambiguous. The 
 \ident{let!} binding followed by \ident{return} can be translated in two different ways. 
-We intentionally do not specify the behaviour in this paper -- the laws in \S\ref{sec:laws-monads} 
+We intentionally do not specify the behaviour in this paper -- the laws (\S\ref{sec:laws-monads})
 require the two translations to be equivalent. For monads, this equivalence is easy to see 
 by considering the definition of \emph{Map} in terms of \emph{Bind} and \emph{Return}.
 
@@ -748,9 +757,12 @@ $\expr~\{\,\cexpr\,\}$. The next section discusses these two in more details.
 \label{sec:semantics-delayed}
 
 We already mentioned that side-effects are an important consideration when adding sequencing to
-monadic comptuations \S\ref{sec:intro-async}. In effectful languages, we need to distinguish 
-between two types of monads. We use the term \emph{monadic computation} for monads that represent 
-a delayed computation such as asynchronous workflows or lazy list comprehensions; the term 
+monadic comptuations (\S\ref{sec:intro-async}). 
+In effectful languages, it becomes apparent that we need to distinguish 
+between two types of monads. 
+
+We use the term \emph{monadic computation} for monads that represent 
+a delayed computation such as asynchronous workflows or lazy lists; the term 
 \emph{monadic containers} will be used for monads that represent a wrapped non-delayed value
 (such as the option type, non-lazy list or the identity monad).
 
@@ -780,19 +792,19 @@ with a corresponding translation:
 \end{array}
 \end{equation*}
 
-For monadic computations such as asynchronous workflows, we do not expect that the defining
-\ident{answer} will print ``Welcome''. This is achieved by the wrapping specified in the 
+For monadic computations such as asynchronous workflows, we do not expect that defining
+\ident{answer} will print ``Welcome''. This is achieved by the wrapping the specified computation in the 
 translation rule for the $\expr~\{\,\cexpr\,\}$ expression. 
 
 In this case, the result of \emph{Delay} is a computation $A\,\ident{int}$ that encapsulates the
-delayed effect. For monadic computations, \emph{Run} is a simple identity -- contrary
-to what the name suggests, it does not run the computation (although that might be an interesting
+delayed effect. For monadic computations, \emph{Run} is a simple identity (of type $M \alpha \rightarrow M \alpha$).
+Contrary to what the name suggests, it does not run the computation (that might be an interesting
 use beyond standard abstract computations). The need for \emph{Run} becomes obvious when we look
 at monadic containers.
 
 \vspace{-1em}
-\subsubsection{Effects and monadic containers.} For monadic containers, it is impossible to define
-a \emph{Delay} operation that does not perform the effects and has a type $(\unit \rightarrow M\alpha) \rightarrow M\alpha$,
+\subsubsection{Monadic containers.} For monadic containers, it is impossible to define
+a \emph{Delay} operation that does not perform the (untracked) side-effects and has a type $(\unit \rightarrow M\alpha) \rightarrow M\alpha$,
 because the resulting type has no way of capturing unevaluated code. However, the (\emph{seq}) typing 
 rule in Figure~\ref{fig:typing} permits an alternative typing. Consider the following example using 
 the Maybe (option) monad:
@@ -836,7 +848,7 @@ function now becomes important as it turns the delayed function into a value of 
 type $M\alpha$ (by applying it).
 
 \vspace{-1em}
-\subsubsection{Unified treatment of effects.} In the typing rules \S\ref{sec:semantics-typing}, 
+\subsubsection{Unified treatment of effects.} In the typing rules (\S\ref{sec:semantics-typing}), 
 we did not explicitly list the two options, because they can be generalized. We require that the
 result of \emph{Delay} is some (possibly different) abstract type $D\alpha$ representing delayed
 computations. For monadic computations, the type is just $M\alpha$ and for monadic containers,
@@ -861,8 +873,8 @@ This means three good things. First, we get better understanding of what computa
 that certain syntactic transformations (refactorings) preserve the meaning of computation. This
 section looks at the last point. 
 
-To keep the presentation in this section focused, we assume that there are no side-effects 
-and we ignore \emph{Run} and \emph{Delay}.
+To keep the presentation in this section focused, we assume that there are no untracked side-effects 
+(such as I/O) and we ignore \emph{Run} and \emph{Delay}.
 
 % --------------------------------------------------------------------------------------------------
 
@@ -873,8 +885,9 @@ We start from the simplest structures. A semigroup $(S, \circ)$ consists of a se
 $S$ and a binary operation $\circ$ such that $a \circ (b \circ c) = (a \circ b) \circ c$.
 A computation expression corresponding to a semigroup defines only \emph{Combine} (of type
 $M\alpha \times M\alpha \rightarrow M\alpha$). To allow appropriate syntax, we also add
-\emph{YieldFrom} which is just the identity function. The associativity implies the following
-syntactic equivalence:
+\emph{YieldFrom} which is just the identity function (with a type $M\alpha \rightarrow M\alpha$). 
+The associativity implies the following syntactic equivalence (we use $m$ as a placeholder
+for concrete computation builder):
 %
 \begin{equation*}
 \ident{m}~\{~\cexpr_1; \,\cexpr_2; \,\cexpr_3 ~\} ~\equiv~
@@ -901,18 +914,19 @@ a computation uses conditional without \ident{else} branch. Thus we get:
 \end{equation*}
 %
 Although these are simple laws, they can be used to reason about list comprehensions. The associativity
-means that we can move a part of computation expression (that uses \ident{yield!} repeatedly) into a
+means that we can move a sub-expression of computation expression (that uses \ident{yield!} repeatedly) into a
 separate computation. To use the identity law, consider a recursive function that generates numbers
 up to 100:
 %
 \begin{equation*}
 \begin{array}{l}
-\kvd{let}~\kvd{rec}~\ident{range}~n =  \ident{seq}~\{~ \kvd{yield}~n\\
-\hspace{10.3em} \kvd{if}~n < 100~\kvd{then}~\kvd{yield!}~\ident{range}~(n + 1)~\}
+\kvd{let}~\kvd{rec}~\ident{range}~n = \ident{seq}~\{~ \\
+\quad\kvd{yield}~n\\
+\quad\kvd{if}~n < 100~\kvd{then}~\kvd{yield!}~\ident{range}~(n + 1)~\}
 \end{array}
 \end{equation*}
 %
-The law guarantees that for $n=100$, the body is equivalent to $\ident{m}~\{~\ident{yield}~100~\}$.
+The law guarantees that for $n=100$, the body equals $\ident{seq}~\{~\ident{yield}~100~\}$.
 This is an expected property of the \ident{if} construct -- the law guarantees that it holds even 
 for \ident{if} that is reinterpreted by some (monoidal) computation expression.
 
@@ -942,9 +956,9 @@ not significantly differ from the laws about Haskell's do notation:
 
 \vspace{-1em}
 \subsubsection{Resolving ambiguity.} When discussing the translation rules 
-\S\ref{sec:semantics-transl}, we noted that the rules are ambiguous when both \emph{Map} and
+(\S\ref{sec:semantics-transl}), we noted that the rules are ambiguous when both \emph{Map} and
 \emph{Bind} operations are present. The following can be translated both monadically and 
-applicatively:
+using the \emph{Map} operation:
 %
 \begin{equation*}
 \ident{m}~\{~\kvd{let!}~x = c~\kvd{in}~\kvd{return}~\expr~\}\\
@@ -963,7 +977,7 @@ not based on a monad), we require this equation to guarantee that the two possib
 produce equivalent computations.
 
 \subsubsection{Additive monads.} Additive monads are computations that combine monad with 
-the monoidal structure. As shown earlier \S\ref{sec:intro-seq-parsers}, these can be embedded
+the monoidal structure. As shown earlier (\S\ref{sec:intro-seq-parsers}), these can be embedded
 using \ident{let!}/\ident{return} or using \ident{for}/\ident{yield}. The choice can be made
 based on the laws that hold.
 
@@ -1028,22 +1042,22 @@ option monad or the software transactional memory monad \cite{stm}.
 \subsection{Monad transformers}
 \label{sec:laws-transf}
 
-There are multiple ways of composing or layering monads \cite{monad-transformers,monad-compose,monads-layered}. 
+There are multiple ways of composing or layering monads \cite{monad-transformers,monad-compose}. 
 Monad transformers are perhaps the most widely known technique. A monad transformer is a type 
 constructor $T\,m$ together with a \emph{Lift} operation. For some monad $M$ the operation has 
 a type $M\,\alpha \rightarrow T\,M\,\alpha$ and it turns a computation in the underlying monad 
-into a computation in the composed monad.
+into a computation in the transformed monad.
 
 The result of monad transformer is also a monad. This means that we can use the usual syntactic 
 sugar for monads, such as the do notation in Haskell. However, a more specific notation can
 use the additional \emph{Lift} operation.
 
 We looked at computation expression for a composed monad when discussing
-asynchronous sequences \S\ref{sec:intro-asyncseq}. An asynchronous sequence $\ident{AsyncSeq}\,\alpha$ 
+asynchronous sequences (\S\ref{sec:intro-asyncseq}). An asynchronous sequence $\ident{AsyncSeq}\,\alpha$ 
 is a computation obtained by applying the list monad transformer \cite{list-trans} to the 
 monad $\ident{Async}\,\alpha$. Asynchronous sequences are \emph{additive monads} satisfying 
 the left distributivity law, so we choose the \ident{for}/\ident{yield} syntax for working with 
-the composed computation. We also provided an additional \emph{Bind} operation to support 
+the composed computation. We also provided additional \emph{Bind} to support 
 awaiting a single asynchronous workflow using \ident{let!} This operation is
 defined in terms of \emph{Lift} of the monad transformer and \emph{For} (monadic bind) of the
 composed computation:
@@ -1082,10 +1096,10 @@ asynchronous sequence and then awaits the rest.
 \subsection{Applicative computations}
 \label{sec:laws-appl}
 
-The last type of computations that we discussed \S\ref{sec:intro-formlets} is \emph{applicative functor}.
+The last type of computations that we discussed (\S\ref{sec:intro-formlets}) is \emph{applicative functor}.
 We use the less common definition called \ident{Monoidal} \cite{applicative}. It consists of \emph{Map} 
-and \emph{Merge}, together with a unit computation. We use the unit to define \emph{Zero} -- it will be 
-used in computations that contain some unit-returning expression, such as $()$.
+and \emph{Merge}, together with a unit computation. The unit computation can be used to define
+\emph{Zero}. This is used only in the translation of empty computations \ident{f \{ () \}}.
 
 The identity law guarantees that merging with a unit and then projecting the non-unit value
 produces an equivalent computation:
@@ -1149,11 +1163,11 @@ used with other computations, this is not generally considered idiomatic use. Si
 the Scala async library \cite{scala-async} supports loops and exception handling. However, it is
 implemented through full macro system.
 
-Aside from monads, other ways of encoding effectful computations include effect handlers
+Other encodings of effectful computations include effect handlers
 \cite{effect-handlers} and continuations \cite{monads-layered}. Providing syntactic support for
-these encodings may provide an interesting alternative to our encoding using computation builder.
-Interestingly, our \emph{Run} operation seems related to \emph{reset} of delimited continuations
-\cite{delimcont} and  our \emph{Delay} is similar to the \emph{reify} operation of Filinsky 
+these may be an interesting alternative to our encoding.
+Interestingly, our \emph{Run} operation resembles \emph{reset} of delimited continuations
+\cite{delimcont} and  our \emph{Delay} is similar to \emph{reify} of Filinsky 
 \cite{monads-inaction}.
 
 
@@ -1162,9 +1176,10 @@ Interestingly, our \emph{Run} operation seems related to \emph{reset} of delimit
 
 \section{Conclusions}
 \label{sec:conclusions}
-
-In this paper, we related F\# \emph{computation expressions} to well-known abstract computation 
-types. Computation expressions provide a unified way for writing a wide range of computations 
+ 
+This paper is presents a principled treatment of F\# \emph{computation expressions}. We develop
+a type system that captures the static semantics and relate the feature to well-known abstract 
+computation types. Computation expressions provide a unified way for writing a wide range of computations 
 including monoids, monads, applicative formlets and monads composed using monad transformers.
 
 Computation expressions follow a different approach than e.g. Haskell ``do'' notation. They
@@ -1178,10 +1193,9 @@ is rapidly running out.
 
 % ==================================================================================================
 
-%
-% \subsubsection{Acknowledgements.} We are grateful to Dominic Orchard, Alan Mycroft, Sam Lindley,
-% anonymous reviewers of previous draft and the audience of TFP 2012. 
-%
+\vspace{-1em}
+\subsubsection{Acknowledgements.} We are grateful to Dominic Orchard, Alan Mycroft, Sam Lindley,
+anonymous reviewers and the audience of TFP 2012. 
 
 \vspace{-1em}
 \bibliographystyle{abbrv}
